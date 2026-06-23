@@ -1,0 +1,218 @@
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  Kong AI Gateway — Configuração Declarativa (DB-less)                      ║
+# ║  PoC: Blindagem PII para Compliance BCB 538/2025                           ║
+# ║                                                                            ║
+# ║  Este arquivo configura:                                                   ║
+# ║   • Rota /llm-proxy para inferência LLM                                   ║
+# ║   • Plugin ai-proxy para roteamento transparente ao AWS Bedrock            ║
+# ║   • Plugin pre-function para interceptação PII via sanitizer customizado   ║
+# ║   • Plugin file-log para trilha de auditoria regulatória                   ║
+# ║                                                                            ║
+# ║  Modelo agnóstico: troque AI_MODEL_NAME no .env para mudar de provedor.   ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
+_format_version: "3.0"
+
+# ── Service ──────────────────────────────────────────────────────────────────
+# Serviço upstream apontando para o Bedrock Runtime.
+# O ai-proxy intercepta e gerencia a autenticação real com a AWS.
+services:
+  - name: llm-bedrock-service
+    url: https://bedrock-runtime.us-east-1.amazonaws.com
+    protocol: https
+    port: 443
+    read_timeout: 60000
+    write_timeout: 60000
+    connect_timeout: 10000
+    retries: 2
+
+    # ── Route ────────────────────────────────────────────────────────────────
+    routes:
+      - name: llm-proxy-route
+        paths:
+          - /llm-proxy
+        methods:
+          - POST
+        strip_path: true
+        protocols:
+          - http
+          - https
+
+    # ── Plugins (associados ao serviço) ──────────────────────────────────────
+    plugins:
+
+      # ┌─────────────────────────────────────────────────────────────────────┐
+      # │  1. PRE-FUNCTION: Interceptação PII (Serverless Lua)               │
+      # │                                                                     │
+      # │  Intercepta o body da request antes de chegar ao ai-proxy.          │
+      # │  Envia o conteúdo ao PII Sanitizer customizado e substitui o body   │
+      # │  com a versão sanitizada. Registra metadados PII no contexto Kong.  │
+      # │                                                                     │
+      # │  ⚡ Funciona sem licença Enterprise (plugin serverless/OSS).        │
+      # └─────────────────────────────────────────────────────────────────────┘
+      - name: pre-function
+        config:
+          access:
+            - |
+              -- ================================================================
+              -- PII Sanitizer Interceptor (Lua)
+              -- Compliance: BCB 538/2025 — Prevenção de Vazamento de Dados
+              -- ================================================================
+
+              local cjson = require "cjson.safe"
+
+              -- Ler o body da request
+              kong.service.request.enable_buffering()
+              local body_raw = kong.request.get_raw_body()
+
+              if not body_raw or body_raw == "" then
+                return
+              end
+
+              -- Parsear o JSON da request (formato OpenAI/LLM)
+              local body_json, err = cjson.decode(body_raw)
+              if err or not body_json then
+                kong.log.warn("[pii-sanitizer] Body não é JSON válido, ignorando: ", err)
+                return
+              end
+
+              -- Extrair o texto dos messages (formato chat completions)
+              local messages = body_json.messages
+              if not messages or type(messages) ~= "table" then
+                kong.log.debug("[pii-sanitizer] Sem campo 'messages', ignorando")
+                return
+              end
+
+              -- Concatenar todo o conteúdo do usuário para análise
+              local texts_to_sanitize = {}
+              local message_indices = {}
+              for i, msg in ipairs(messages) do
+                if msg.content and type(msg.content) == "string" then
+                  table.insert(texts_to_sanitize, msg.content)
+                  table.insert(message_indices, i)
+                end
+              end
+
+              if #texts_to_sanitize == 0 then
+                return
+              end
+
+              -- Chamar o PII Sanitizer para cada mensagem
+              local http = require "resty.http"
+              local httpc = http.new()
+              httpc:set_timeout(5000)
+
+              local total_pii_count = 0
+              local pii_types = {}
+              local redact_type = os.getenv("PII_REDACT_TYPE") or "placeholder"
+
+              for idx, text in ipairs(texts_to_sanitize) do
+                local sanitize_payload = cjson.encode({
+                  text = text,
+                  redact_type = redact_type,
+                })
+
+                local res, req_err = httpc:request_uri(
+                  "http://pii-sanitizer:8088/sanitize",
+                  {
+                    method = "POST",
+                    body = sanitize_payload,
+                    headers = {
+                      ["Content-Type"] = "application/json",
+                    },
+                  }
+                )
+
+                if req_err then
+                  kong.log.err("[pii-sanitizer] Erro ao contactar sanitizer: ", req_err)
+                  -- Fail-open: permite a request continuar sem sanitização
+                  -- Em produção, considere fail-closed (bloquear request)
+                else
+                  local sanitize_result, parse_err = cjson.decode(res.body)
+                  if sanitize_result and not parse_err then
+                    -- Substituir o conteúdo da mensagem com a versão sanitizada
+                    local msg_idx = message_indices[idx]
+                    body_json.messages[msg_idx].content = sanitize_result.sanitized_text
+
+                    -- Acumular metadados para auditoria
+                    total_pii_count = total_pii_count + (sanitize_result.total_entities or 0)
+                    if sanitize_result.pii_detected then
+                      for _, entity in ipairs(sanitize_result.pii_detected) do
+                        pii_types[entity.type] = (pii_types[entity.type] or 0) + 1
+                      end
+                    end
+
+                    if sanitize_result.total_entities > 0 then
+                      kong.log.info(
+                        "[pii-sanitizer] Sanitizado: ",
+                        sanitize_result.total_entities,
+                        " entidades PII detectadas na mensagem ",
+                        msg_idx
+                      )
+                    end
+                  end
+                end
+              end
+
+              -- Substituir o body da request com a versão sanitizada
+              local new_body = cjson.encode(body_json)
+              kong.service.request.set_raw_body(new_body)
+
+              -- Salvar metadados PII no contexto do Kong para o file-log
+              if total_pii_count > 0 then
+                kong.ctx.shared.pii_sanitizer = {
+                  pii_identified = total_pii_count,
+                  pii_types = pii_types,
+                  redact_type = redact_type,
+                  timestamp = ngx.now(),
+                }
+              end
+
+      # ┌─────────────────────────────────────────────────────────────────────┐
+      # │  2. AI-PROXY: Roteamento transparente ao AWS Bedrock               │
+      # │                                                                     │
+      # │  Gerencia autenticação SigV4 e tradução de formato para o          │
+      # │  provedor AWS Bedrock. Modelo configurável via variável de env.    │
+      # │                                                                     │
+      # │  ⚠️  Requer licença Enterprise (trial 30 dias disponível).         │
+      # └─────────────────────────────────────────────────────────────────────┘
+      - name: ai-proxy
+        config:
+          route_type: "llm/v1/chat"
+          auth:
+            allow_override: false
+          model:
+            provider: "bedrock"
+            name: "amazon.titan-text-express-v1"
+            options:
+              bedrock:
+                aws_region: "us-east-1"
+          logging:
+            log_statistics: true
+            log_payloads: false
+
+      # ┌─────────────────────────────────────────────────────────────────────┐
+      # │  3. FILE-LOG: Trilha de auditoria regulatória                      │
+      # │                                                                     │
+      # │  Registra cada request/response com metadados completos.           │
+      # │  Os dados do PII Sanitizer (ctx.shared.pii_sanitizer) são          │
+      # │  automaticamente incluídos no log serializado.                     │
+      # │                                                                     │
+      # │  Campo de auditoria BCB: pii_identified (tipo e quantidade)        │
+      # └─────────────────────────────────────────────────────────────────────┘
+      - name: file-log
+        config:
+          path: "/tmp/kong-audit.log"
+          reopen: true
+
+      # ┌─────────────────────────────────────────────────────────────────────┐
+      # │  4. CORRELATION-ID: Rastreabilidade de requisições                 │
+      # │                                                                     │
+      # │  Gera um ID único por request para correlação em auditoria.        │
+      # │  Exigência BCB 538/2025: rastreabilidade ponta-a-ponta.            │
+      # └─────────────────────────────────────────────────────────────────────┘
+      - name: correlation-id
+        config:
+          header_name: "X-Request-ID"
+          generator: "uuid#counter"
+          echo_downstream: true

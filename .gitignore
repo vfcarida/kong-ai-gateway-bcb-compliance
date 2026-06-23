@@ -1,0 +1,29 @@
+# === Secrets ===
+.env
+
+# === Logs (audit trail gerado em runtime) ===
+logs/
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+
+# === Docker ===
+*.log
+
+# === IDE ===
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# === OS ===
+.DS_Store
+Thumbs.db
