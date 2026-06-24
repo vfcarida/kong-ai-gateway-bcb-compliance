@@ -56,6 +56,12 @@ App → Kong Gateway → [PII Sanitizer] → [AI Proxy] → AWS Bedrock
 
 ## 🏗️ Arquitetura
 
+### Estratégia Dual-Layer (Sem dependência estrita de licença)
+A PoC foi desenhada com uma abordagem de duas camadas para garantir que a ofuscação de PII ocorra **mesmo sem uma licença Kong Enterprise ativa**:
+
+1. **Camada Gateway (Kong)**: Utiliza o plugin `ai-proxy` para padronizar e rotear as chamadas para a AWS Bedrock. (Requer trial/licença).
+2. **Camada Sanitizer (Custom)**: Utiliza o plugin `pre-function` (serverless, open-source) do Kong para interceptar o body da requisição ANTES de enviá-lo ao `ai-proxy`. O Kong envia o body para nosso serviço FastAPI (PII Sanitizer), que detecta, ofusca o PII e devolve o body modificado para o Kong seguir o fluxo.
+
 ```
 ┌──────────────────┐     ┌─────────────────────────────────────────┐     ┌──────────────┐
 │                  │     │          Docker Compose Network          │     │              │
@@ -168,7 +174,9 @@ python test_kong_proxy.py
 
 ### Trocar de Modelo LLM
 
-A implementação é **model-agnostic**. Para trocar de modelo, edite apenas o `.env`:
+A implementação é **model-agnostic**. O plugin `ai-proxy` atua como um tradutor universal: você envia o request sempre no formato padrão da OpenAI (chat completions) e o Kong converte automaticamente para o formato específico do modelo de destino na AWS.
+
+Para trocar de modelo (ex: de Titan para Claude ou Llama), **você não precisa alterar o código do cliente ou os testes**, edite apenas o `.env`:
 
 ```bash
 # Amazon Titan (padrão)
@@ -221,6 +229,23 @@ docker compose up -d --build pii-sanitizer
 ---
 
 ## 🧪 Teste de Integração
+
+### Como Modificar e Criar Novos Testes
+O script `test_kong_proxy.py` foi desenhado para ser facilmente extensível. Para adicionar novos cenários de teste (por exemplo, testar um novo formato de CNPJ ou um prompt malicioso):
+
+1. Abra o arquivo `test_kong_proxy.py`.
+2. Localize a lista `TEST_PROMPTS` no início do arquivo.
+3. Adicione um novo dicionário com o nome do cenário, o prompt a ser enviado e as entidades PII que você espera que sejam detectadas (`expected_pii`).
+
+Exemplo:
+```python
+{
+    "name": "Cenário 5: Teste de CNPJ e dados de cartão",
+    "prompt": "A empresa fictícia LTDA, CNPJ 12.345.678/0001-99 usou o cartão 4532 1111 2222 3333.",
+    "expected_pii": ["CNPJ", "CREDIT_CARD"],
+}
+```
+*Lembrete: se adicionar um novo tipo como `CNPJ`, certifique-se de ter adicionado a regra correspondente no regex do `pii-sanitizer/app/main.py`.*
 
 ### Teste Isolado do PII Sanitizer
 

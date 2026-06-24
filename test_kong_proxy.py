@@ -14,6 +14,19 @@ Uso:
 
 Requisitos:
     pip install requests
+
+=====================================================
+ℹ️  SOBRE A ARQUITETURA DUAL-LAYER:
+A PoC utiliza uma abordagem de duas camadas (Dual-Layer) para contornar
+a exigência de licença Enterprise do plugin ai-sanitizer nativo do Kong:
+
+1. Camada Gateway (Kong): Usa o plugin ai-proxy para rotear requests para a AWS.
+2. Camada Sanitizer (Custom): Usa o plugin pre-function (serverless) do Kong
+   para interceptar a request ANTES de chegar ao ai-proxy, enviando o body
+   para o nosso serviço FastAPI (PII Sanitizer) analisar e ofuscar.
+
+Isso garante que a ofuscação ocorra independente da licença Enterprise.
+=====================================================
 """
 
 import argparse
@@ -36,7 +49,11 @@ KONG_PROXY_URL = "http://localhost:8000"
 KONG_ADMIN_URL = "http://localhost:8001"
 PII_SANITIZER_URL = "http://localhost:8088"
 
-# Prompts com dados sensíveis fictícios para teste
+# Prompts com dados sensíveis fictícios para teste.
+# 💡 COMO ADICIONAR NOVOS TESTES:
+# Para testar novos modelos ou novos padrões PII, basta adicionar um novo
+# dicionário à lista abaixo. Certifique-se de listar as entidades PII
+# esperadas em "expected_pii" (NAME, CPF, EMAIL, PHONE, MONEY).
 TEST_PROMPTS = [
     {
         "name": "Cenário 1: Dados bancários com CPF formatado",
@@ -247,7 +264,12 @@ def test_kong_e2e() -> bool:
     print(f"\n  {Colors.BOLD}📝 {prompt['name']}{Colors.END}")
     print(f"  {Colors.DIM}Prompt original: \"{prompt['prompt']}\"{Colors.END}")
 
-    # Formato OpenAI/LLM chat completions
+    # 💡 FORMATO DO PAYLOAD E MODELOS LLM:
+    # O plugin 'ai-proxy' do Kong age como um tradutor universal.
+    # Ele aceita o formato padrão da OpenAI (chat completions) e converte
+    # automaticamente para o formato específico do provedor configurado no Kong.
+    # Portanto, MESMO SE VOCÊ TROCAR O MODELO (ex: de Titan para Claude ou Llama),
+    # você NÃO precisa mudar o formato deste payload de teste. O Kong cuida disso.
     payload = {
         "messages": [
             {
@@ -294,9 +316,15 @@ def test_kong_e2e() -> bool:
             print(f"\n  {Colors.GREEN}Resposta do LLM:{Colors.END}")
             print_json(response_data)
 
-            # Verificar se o prompt original NÃO está na resposta
+            # 💡 VERIFICAÇÃO DE OFUSCAÇÃO:
+            # Aqui garantimos que o dado original não vazou para a resposta final.
+            # Se você mudar o prompt de teste inicial, certifique-se de atualizar
+            # a variável 'original_cpf' (ou o dado sensível que deseja testar)
+            # para que a validação continue funcionando.
             original_cpf = "123.456.789-00"
             response_text = json.dumps(response_data)
+            
+            # Checagem simples de segurança: o dado original NÃO pode estar no JSON final
             if original_cpf not in response_text:
                 print_success(
                     f"CPF original ({original_cpf}) NÃO presente na resposta — "
