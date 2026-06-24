@@ -1,455 +1,280 @@
-# 🛡️ Kong AI Gateway — PoC Blindagem PII
+<div align="center">
+  <h1>🛡️ Kong AI Gateway — PII Shield PoC</h1>
+  <p><strong>Blindagem em Tempo Real de Dados Sensíveis para Modelos de IA na AWS</strong></p>
+  
+  <p>
+    <img src="https://img.shields.io/badge/Compliance-BCB_538%2F2025-0052CC?style=flat-square&logo=databricks" alt="Compliance BCB" />
+    <img src="https://img.shields.io/badge/Kong-Gateway_Enterprise_3.14-003459?style=flat-square&logo=kong" alt="Kong Gateway" />
+    <img src="https://img.shields.io/badge/Python-3.12-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python" />
+    <img src="https://img.shields.io/badge/Docker-Compose-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker" />
+  </p>
+</div>
 
-> **Compliance: Resolução BCB nº 538/2025 | Prevenção de Vazamento de Dados em Inferência LLM**
+<br/>
 
-Prova de Conceito (PoC) que estabelece o **Kong AI Gateway** como plano de controle centralizado para chamadas de inferência a LLMs na AWS (Bedrock/SageMaker), com **ofuscação nativa e em tempo real de Informações Pessoalmente Identificáveis (PII)** — foco especial em **CPFs brasileiros**.
+> **Missão:** Estabelecer o Kong AI Gateway como um plano de controle centralizado (Control Plane) para chamadas de inferência a LLMs, garantindo a ofuscação nativa de Informações Pessoalmente Identificáveis (PII) — com foco em CPFs brasileiros — antes que os dados atinjam os provedores de Nuvem.
 
 ---
 
-## 📋 Índice
+## 📑 Índice
 
-- [Motivação](#-motivação)
+- [Visão Geral](#-visão-geral)
+  - [O Desafio](#o-desafio)
+  - [A Solução](#a-solução)
 - [Arquitetura](#-arquitetura)
-- [Pré-requisitos](#-pré-requisitos)
-- [Quickstart](#-quickstart)
-- [Guia de Configuração](#-guia-de-configuração)
-- [Teste de Integração](#-teste-de-integração)
-- [Auditoria e Compliance BCB](#-auditoria-e-compliance-bcb)
-- [Mapeamento BCB 538/2025](#-mapeamento-bcb-5382025)
+  - [Estratégia Dual-Layer](#estratégia-dual-layer-agnóstica-a-licença)
+  - [Fluxo de Dados](#fluxo-de-dados-sequence)
+- [Funcionalidades Principais](#-funcionalidades-principais)
+- [Primeiros Passos](#-primeiros-passos)
+  - [Pré-requisitos](#pré-requisitos)
+  - [Instalação e Execução](#instalação-e-execução)
+- [Guia de Testes](#-guia-de-testes)
+  - [Como Modificar os Testes](#como-modificar-e-criar-novos-testes)
+- [Configuração e Customização](#-configuração-e-customização)
+  - [Trocar de Modelo LLM](#trocar-de-modelo-llm)
+  - [Modos de Redação PII](#modos-de-redação-pii)
+- [Auditoria e Compliance (BCB 538/2025)](#-auditoria-e-compliance-bcb-5382025)
 - [Troubleshooting](#-troubleshooting)
-- [Estrutura do Projeto](#-estrutura-do-projeto)
 
 ---
 
-## 🎯 Motivação
+## 🔎 Visão Geral
 
-### O Problema
+### O Desafio
+As aplicações corporativas modernas frequentemente integram Modelos de Linguagem (LLMs) via chamadas diretas aos SDKs dos provedores em nuvem (ex: `boto3` para AWS Bedrock). Esta arquitetura cria um **acoplamento forte** e, mais gravemente, um ponto cego de governança: dados de clientes (PII) podem vazar acidentalmente nos prompts.
 
-Nossas aplicações interagem com LLMs na AWS diretamente via SDKs (`boto3`), criando:
-
-- **Acoplamento forte** — cada aplicação gerencia sua própria conexão com o LLM
-- **Vulnerabilidade de governança** — dados sensíveis (CPF, nomes, valores) podem vazar para provedores de IA
-- **Falta de rastreabilidade** — sem trilha de auditoria centralizada das chamadas de inferência
-
-### A Regulação
-
-A **Resolução BCB nº 538/2025** (vigente desde 1º de março de 2026) exige controles prescritivos de:
-
-| Controle BCB | Descrição |
-|---|---|
-| **Prevenção de Vazamento (DLP)** | Mecanismos para evitar exfiltração de dados sensíveis |
-| **Rastreabilidade** | Monitoramento e registro robusto de eventos e transações |
-| **Governança sobre Terceiros** | Padrões de segurança aplicados a fornecedores (incluindo nuvem/IA) |
-| **Criptografia** | Proteção da confidencialidade e integridade dos dados |
+Para instituições financeiras no Brasil, a **Resolução BCB nº 538/2025** exige controles prescritivos rigorosos de Prevenção de Vazamento de Dados (DLP), rastreabilidade ponta-a-ponta e governança estrita sobre fornecedores terceirizados.
 
 ### A Solução
-
-O **Kong AI Gateway** atua como plano de controle centralizado, interceptando todas as chamadas de inferência e aplicando políticas de segurança automaticamente:
-
-```
-App → Kong Gateway → [PII Sanitizer] → [AI Proxy] → AWS Bedrock
-                          ↓
-                    Audit Log (BCB)
-```
+Implementação do **Kong AI Gateway** atuando como um firewall de IA (Control Plane). Ele centraliza as conexões, padroniza as requisições e intercepta o tráfego para higienizar dados sensíveis em tempo real, garantindo que o provedor LLM nunca tenha acesso ao dado original do cliente.
 
 ---
 
 ## 🏗️ Arquitetura
 
-### Estratégia Dual-Layer (Sem dependência estrita de licença)
-A PoC foi desenhada com uma abordagem de duas camadas para garantir que a ofuscação de PII ocorra **mesmo sem uma licença Kong Enterprise ativa**:
+### Estratégia Dual-Layer (Agnóstica a Licença)
 
-1. **Camada Gateway (Kong)**: Utiliza o plugin `ai-proxy` para padronizar e rotear as chamadas para a AWS Bedrock. (Requer trial/licença).
-2. **Camada Sanitizer (Custom)**: Utiliza o plugin `pre-function` (serverless, open-source) do Kong para interceptar o body da requisição ANTES de enviá-lo ao `ai-proxy`. O Kong envia o body para nosso serviço FastAPI (PII Sanitizer), que detecta, ofusca o PII e devolve o body modificado para o Kong seguir o fluxo.
+Para garantir máxima flexibilidade, construímos uma arquitetura de duas camadas que realiza a ofuscação **mesmo sem depender exclusivamente da licença Kong Enterprise**:
 
+1. **Camada Gateway (Kong)**: Centraliza as requisições e utiliza o plugin `ai-proxy` (Enterprise) para traduzir o padrão universal OpenAI para o formato nativo da AWS Bedrock/SageMaker.
+2. **Camada Sanitizer (Custom)**: Utiliza o plugin `pre-function` (serverless, open-source) do Kong para interceptar o body da requisição HTTP *antes* dela ser roteada. O Kong encaminha o dado para um serviço independente (FastAPI), que executa a detecção regex/heurística, ofusca o PII e devolve o payload higienizado.
+
+<div align="center">
+  <img src="https://raw.githubusercontent.com/github/explore/80688e429a7d4ef2fca1e82350fe8e3517d3494d/topics/architecture/architecture.png" alt="Arquitetura" width="100" style="opacity: 0; height: 1px;" />
+</div>
+
+```mermaid
+graph TD
+    Client[📱 Cliente / Aplicação] -->|POST /llm-proxy<br>Prompt Original| Kong[🦍 Kong AI Gateway<br>Porta 8000]
+    
+    subgraph "Docker Compose (Local)"
+        Kong <-->|Interceptação PII<br>Plugin pre-function| Sanitizer[🛡️ PII Sanitizer<br>FastAPI Engine]
+        Kong -.->|Gera Logs de Auditoria| FileLog[(📄 Audit Logs)]
+    end
+    
+    Kong -->|Plugin ai-proxy<br>Prompt Higienizado| AWS[☁️ AWS Bedrock<br>LLM Model]
+    
+    classDef kong fill:#003459,stroke:#fff,stroke-width:2px,color:#fff;
+    classDef aws fill:#FF9900,stroke:#fff,stroke-width:2px,color:#fff;
+    classDef sanitizer fill:#3776AB,stroke:#fff,stroke-width:2px,color:#fff;
+    
+    class Kong kong;
+    class AWS aws;
+    class Sanitizer sanitizer;
 ```
-┌──────────────────┐     ┌─────────────────────────────────────────┐     ┌──────────────┐
-│                  │     │          Docker Compose Network          │     │              │
-│  🐍 Cliente      │     │                                         │     │  ☁️  AWS      │
-│                  │ ──► │  🦍 Kong Gateway    🛡️ PII Sanitizer    │ ──► │  Bedrock     │
-│  test_kong_      │     │     :8000/:8001        :8088            │     │  Titan/      │
-│  proxy.py        │ ◄── │                                         │ ◄── │  Claude/     │
-│                  │     │     📄 Audit Log (/tmp/kong-audit.log)  │     │  Llama       │
-└──────────────────┘     └─────────────────────────────────────────┘     └──────────────┘
+
+### Fluxo de Dados (Sequence)
+
+```mermaid
+sequenceDiagram
+    participant App as Cliente
+    participant Kong as Kong Gateway
+    participant PII as PII Sanitizer
+    participant Bedrock as AWS Bedrock
+
+    App->>Kong: Request LLM (Prompt com CPF)
+    activate Kong
+    Kong->>PII: Envia body para análise
+    activate PII
+    PII-->>PII: Detecta & Ofusca PII
+    PII-->>Kong: Body Modificado (CPF Redacted)
+    deactivate PII
+    
+    Kong->>Kong: Registra contexto de Auditoria
+    
+    Kong->>Bedrock: Encaminha Prompt Limpo
+    activate Bedrock
+    Bedrock-->>Kong: Resposta do Modelo
+    deactivate Bedrock
+    
+    Kong->>Kong: Escreve no file-log (Audit)
+    Kong-->>App: Retorna Resposta
+    deactivate Kong
 ```
-
-### Fluxo de Dados
-
-1. **Cliente** envia prompt com dados sensíveis (CPF, nome, valores) → Kong `:8000/llm-proxy`
-2. **Plugin `pre-function`** (Lua) intercepta o body e envia ao **PII Sanitizer** `:8088/sanitize`
-3. **PII Sanitizer** (FastAPI) detecta entidades via regex e heurísticas, retorna texto ofuscado
-4. **Plugin `ai-proxy`** encaminha prompt sanitizado ao **Amazon Bedrock**
-5. Resposta do LLM retorna ao cliente via Kong
-6. **Plugin `file-log`** registra metadados de auditoria para compliance BCB
-
-### Componentes
-
-| Componente | Tecnologia | Licença | Função |
-|---|---|---|---|
-| Kong Gateway | Kong Enterprise 3.14 LTS (DB-less) | Trial 30 dias | Orquestração, roteamento LLM |
-| PII Sanitizer | Python 3.12 + FastAPI | Open Source | Detecção e ofuscação de PII |
-| Audit Logger | Kong file-log plugin | Incluso | Trilha de auditoria |
 
 ---
 
-## 📦 Pré-requisitos
+## ✨ Funcionalidades Principais
 
-| Requisito | Versão | Obrigatório |
-|---|---|---|
-| Docker + Docker Compose | 24.0+ | ✅ |
-| Python | 3.10+ | ✅ (para testes) |
-| Licença Kong Enterprise | Trial 30 dias | ⚠️ (para `ai-proxy`) |
-| Credenciais AWS | IAM com acesso Bedrock | ⚠️ (para E2E) |
-
-> **💡 Sem licença Enterprise?** A PoC funciona parcialmente — o PII Sanitizer opera de forma independente e pode ser testado com `--sanitizer-only`.
-
-### Como obter o Trial de 30 dias (Kong Enterprise)
-
-1. Acesse **[konnect.konghq.com](https://konnect.konghq.com/)** e crie uma conta gratuita
-2. No dashboard, vá em **Gateway Manager** → **Gerar Licença**
-3. Copie o JSON da licença
-4. Cole no arquivo `.env` na variável `KONG_LICENSE_DATA`
+- 🕵️ **Detecção de PII Brasileiro**: Identificação nativa de CPFs (formatados ou numéricos, com validação de checksum), telefones (DDD + número), nomes próprios e dados financeiros.
+- 🔄 **Dados Sintéticos (Synthetic Data)**: Capacidade de trocar dados sensíveis por dados falsos coerentes e matematicamente válidos (ex: um CPF falso válido) em vez de apenas placeholders.
+- 🧠 **Agnóstico a LLM**: Transição entre Amazon Titan, Anthropic Claude ou Meta Llama alterando apenas uma variável de ambiente, sem mudar uma linha de código nas aplicações cliente.
+- 📜 **Trilha de Auditoria BCB**: Logs granulares detalhando *quantos* e *quais tipos* de PII foram interceptados por requisição.
 
 ---
 
-## 🚀 Quickstart
+## 🚀 Primeiros Passos
 
-### 1. Clonar e configurar
+### Pré-requisitos
+
+- [Docker](https://docs.docker.com/get-docker/) e Docker Compose (v24.0+)
+- [Python 3.10+](https://www.python.org/downloads/) (apenas para executar o script de teste)
+- Credenciais AWS (IAM com permissões de acesso ao Bedrock)
+- *(Opcional)* Licença Kong Enterprise Trial para habilitar o `ai-proxy` (Obtenha em [Kong Konnect](https://konnect.konghq.com/))
+
+### Instalação e Execução
+
+1. **Clone o repositório e configure as credenciais:**
 
 ```bash
 git clone <repo-url>
 cd kong-ai-gateway-bcb-compliance
 
-# Copiar template de variáveis de ambiente
+# Crie seu arquivo de ambiente
 cp .env.example .env
 ```
 
-Edite o arquivo `.env` com suas credenciais:
+2. **Edite o arquivo `.env` com suas chaves:**
+> ⚠️ **Dica:** O sistema funciona com a variável `KONG_LICENSE_DATA` vazia apenas para a etapa do PII Sanitizer, mas o teste completo ponta-a-ponta na AWS exige a licença do `ai-proxy`.
 
-```bash
-# Mínimo necessário:
-AWS_ACCESS_KEY_ID=AKIA...
-AWS_SECRET_ACCESS_KEY=wJal...
-AWS_REGION=us-east-1
-
-# Opcional (para ai-proxy nativo):
-KONG_LICENSE_DATA='{"license":{"payload":...}}'
-```
-
-### 2. Subir a infraestrutura
+3. **Suba a infraestrutura:**
 
 ```bash
 docker compose up -d --build
 ```
 
-Aguarde os health checks passarem (30-60 segundos):
+4. **Verifique a saúde dos serviços:**
 
 ```bash
-# Verificar status dos containers
-docker compose ps
-
-# Health check do PII Sanitizer
-curl -s http://localhost:8088/health | python -m json.tool
-
-# Health check do Kong
+# Saúde do Kong
 curl -s http://localhost:8001/status | python -m json.tool
-```
 
-### 3. Executar testes
-
-```bash
-# Instalar dependência de teste
-pip install requests
-
-# Teste apenas o PII Sanitizer (sem necessidade de AWS)
-python test_kong_proxy.py --sanitizer-only
-
-# Teste completo E2E (requer AWS + licença Kong)
-python test_kong_proxy.py
+# Saúde do Sanitizer Customizado
+curl -s http://localhost:8088/health | python -m json.tool
 ```
 
 ---
 
-## ⚙️ Guia de Configuração
+## 🧪 Guia de Testes
+
+A PoC acompanha uma suíte de integração robusta (`test_kong_proxy.py`) com output colorido e validações estruturadas.
+
+Instale a dependência de testes:
+```bash
+pip install requests
+```
+
+| Comando | O que faz | Ideal para |
+|---|---|---|
+| `python test_kong_proxy.py` | Executa o fluxo E2E (App → Kong → Sanitizer → AWS) | Homologação final |
+| `python test_kong_proxy.py --sanitizer-only` | Testa a higienização de CPF/Nomes isoladamente, sem passar pela AWS | Ambientes sem licença ou chaves Cloud |
+| `python test_kong_proxy.py --synthetic` | Ativa o modo de geração de dados falsos em vez de placeholders `[REDACTED]` | Validação de qualidade de ofuscação |
+
+### Como Modificar e Criar Novos Testes
+
+O script de teste é extensível. Para simular novos ataques de vazamento de dados ou testar detecção de CNPJs:
+
+1. Edite o `test_kong_proxy.py`.
+2. Localize a constante `TEST_PROMPTS` e adicione seu caso:
+
+```python
+{
+    "name": "Teste Customizado: Cartão Corporativo",
+    "prompt": "O diretor de TI comprou servidores usando o cartão Visa 4111 2222 3333 4444.",
+    "expected_pii": ["CREDIT_CARD"], # Garanta que a regex de CREDIT_CARD existe no main.py
+}
+```
+*Lembrete: se adicionar um novo tipo de dado (ex: `CNPJ`), certifique-se de ter adicionado a regra correspondente no regex do módulo Python (`pii-sanitizer/app/main.py`).*
+
+---
+
+## ⚙️ Configuração e Customização
 
 ### Trocar de Modelo LLM
 
-A implementação é **model-agnostic**. O plugin `ai-proxy` atua como um tradutor universal: você envia o request sempre no formato padrão da OpenAI (chat completions) e o Kong converte automaticamente para o formato específico do modelo de destino na AWS.
+A genialidade do `ai-proxy` é sua **tradução universal**. A sua aplicação envia o payload no padrão OpenAI (Chat Completions) e o Kong traduz em voo.
 
-Para trocar de modelo (ex: de Titan para Claude ou Llama), **você não precisa alterar o código do cliente ou os testes**, edite apenas o `.env`:
+Para trocar a inteligência artificial, **não altere seu código**, apenas modifique o `.env`:
 
-```bash
+```env
 # Amazon Titan (padrão)
 AI_MODEL_NAME=amazon.titan-text-express-v1
 
-# Anthropic Claude 3 Sonnet
+# Ou mude para Claude 3 Sonnet:
 AI_MODEL_NAME=anthropic.claude-3-sonnet-20240229-v1:0
 
-# Anthropic Claude 3 Haiku (mais rápido)
-AI_MODEL_NAME=anthropic.claude-3-haiku-20240307-v1:0
-
-# Meta Llama 3 70B
+# Ou Llama 3:
 AI_MODEL_NAME=meta.llama3-70b-instruct-v1:0
 ```
+Após alterar, aplique as mudanças no container: `docker compose restart kong-gateway`.
 
-Após alterar, reinicie o Kong:
+### Modos de Redação PII
 
-```bash
-docker compose restart kong-gateway
-```
+O Sanitizer customizado aceita duas abordagens via a variável `PII_REDACT_TYPE` (no arquivo `.env`):
 
-### Trocar Modo de Redação PII
-
-```bash
-# Placeholders ([REDACTED_CPF_1], [REDACTED_EMAIL_1], etc.)
-PII_REDACT_TYPE=placeholder
-
-# Dados sintéticos (CPF falso válido, email falso, etc.)
-PII_REDACT_TYPE=synthetic
-```
-
-### Adicionar Novos Padrões PII
-
-Edite `pii-sanitizer/app/main.py` e adicione ao array `PII_PATTERNS`:
-
-```python
-PII_PATTERNS.append((
-    "CNPJ",                                              # Tipo
-    re.compile(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}"),    # Regex
-    0,                                                    # Prioridade
-))
-```
-
-Rebuild o container:
-
-```bash
-docker compose up -d --build pii-sanitizer
-```
+- `placeholder` (Default): Substitui por tokens fixos como `[REDACTED_CPF_1]`. Mais seguro para auditoria bruta.
+- `synthetic`: Gera um CPF falso e válido (ex: `847.192.483-11`). Excelente para manter o LLM no contexto original sem quebrar formatações de tabela ou lógicas do prompt.
 
 ---
 
-## 🧪 Teste de Integração
+## 🏛️ Auditoria e Compliance (BCB 538/2025)
 
-### Como Modificar e Criar Novos Testes
-O script `test_kong_proxy.py` foi desenhado para ser facilmente extensível. Para adicionar novos cenários de teste (por exemplo, testar um novo formato de CNPJ ou um prompt malicioso):
+A Resolução BCB nº 538/2025 exige evidências concretas. Esta PoC mapeia diretamente os controles:
 
-1. Abra o arquivo `test_kong_proxy.py`.
-2. Localize a lista `TEST_PROMPTS` no início do arquivo.
-3. Adicione um novo dicionário com o nome do cenário, o prompt a ser enviado e as entidades PII que você espera que sejam detectadas (`expected_pii`).
+| 🛡️ Controle Exigido (BCB) | ⚙️ Como Atendemos na Arquitetura |
+|---|---|
+| **DLP (Prevenção de Vazamento)** | Interceptação e bloqueio de PII brasileiro no gateway antes de chegar à Nuvem. |
+| **Rastreabilidade Transacional** | Headers `X-Request-ID` e `file-log` auditando o volume e os tipos de entidades sanitizadas. |
+| **Governança sobre Terceiros** | O Control Plane centralizado impede que provedores AWS recebam os dados originais do cliente. |
+| **Criptografia em Trânsito** | O Kong suporta terminação TLS Edge-to-Edge nativamente. |
 
-Exemplo:
-```python
-{
-    "name": "Cenário 5: Teste de CNPJ e dados de cartão",
-    "prompt": "A empresa fictícia LTDA, CNPJ 12.345.678/0001-99 usou o cartão 4532 1111 2222 3333.",
-    "expected_pii": ["CNPJ", "CREDIT_CARD"],
-}
-```
-*Lembrete: se adicionar um novo tipo como `CNPJ`, certifique-se de ter adicionado a regra correspondente no regex do `pii-sanitizer/app/main.py`.*
+### Visualizando Evidências de Auditoria
 
-### Teste Isolado do PII Sanitizer
+Os logs são estruturados em JSON para fácil integração com plataformas SIEM (Splunk, Datadog, Elastic).
 
 ```bash
-python test_kong_proxy.py --sanitizer-only
+# Ver as interceptações PII brutas do Kong:
+docker compose exec kong-gateway cat /tmp/kong-audit.log | grep pii_sanitizer | jq
 ```
 
-Este teste **não requer** licença Enterprise nem credenciais AWS. Ele valida:
-
-- ✅ Detecção de CPF formatado (`123.456.789-00`)
-- ✅ Detecção de CPF numérico (`12345678900`)
-- ✅ Detecção de emails (`maria@empresa.com`)
-- ✅ Detecção de telefones (`(11) 99876-5432`)
-- ✅ Detecção de nomes próprios (`João da Silva`)
-- ✅ Detecção de valores monetários (`R$ 50.000`)
-- ✅ Controle negativo (sem falsos positivos)
-
-### Teste com Dados Sintéticos
-
-```bash
-python test_kong_proxy.py --sanitizer-only --synthetic
-```
-
-Gera dados falsos mas coerentes em vez de placeholders:
-- CPF → CPF falso matematicamente válido
-- Email → email em domínio fictício
-- Telefone → número brasileiro falso
-- Nome → nome aleatório
-
-### Teste E2E via Kong
-
-```bash
-python test_kong_proxy.py
-```
-
-Requer:
-- ✅ Docker Compose rodando (`docker compose up -d`)
-- ✅ Credenciais AWS válidas no `.env`
-- ✅ Licença Kong Enterprise (trial 30 dias) para o `ai-proxy`
-
-### Teste Manual via cURL
-
-```bash
-curl -s -X POST http://localhost:8000/llm-proxy \
-  -H "Content-Type: application/json" \
-  -d '{
-    "messages": [
-      {
-        "role": "user",
-        "content": "Meu nome é João da Silva, CPF 123.456.789-00. Qual meu saldo?"
-      }
-    ]
-  }' | python -m json.tool
-```
-
----
-
-## 📊 Auditoria e Compliance BCB
-
-### Consultar Logs de Auditoria
-
-```bash
-# Ver todos os logs de auditoria do Kong
-docker compose exec kong-gateway cat /tmp/kong-audit.log | python -m json.tool
-
-# Ver logs do PII Sanitizer (detalhes das detecções)
-docker compose logs pii-sanitizer --tail=100
-```
-
-### Campos de Auditoria para Relatório BCB
-
-Os logs do Kong incluem metadados estruturados do PII Sanitizer:
-
+*Exemplo de registro no sistema de logs:*
 ```json
-{
-  "request": {
-    "uri": "/llm-proxy",
-    "method": "POST",
-    "headers": {
-      "x-request-id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
-    }
+"pii_sanitizer": {
+  "pii_identified": 3,
+  "pii_types": {
+    "NAME": 1,
+    "CPF": 1,
+    "MONEY": 1
   },
-  "response": {
-    "status": 200
-  },
-  "latencies": {
-    "proxy": 1234,
-    "kong": 56,
-    "request": 1290
-  },
-  "started_at": 1719158400000
+  "redact_type": "placeholder",
+  "timestamp": 1719245100.123
 }
 ```
 
-Os logs do **PII Sanitizer** (via `docker compose logs`) incluem:
-
-```
-2026-06-23 14:30:00 [INFO] pii-sanitizer: PII detectado: 3 entidades [NAME, CPF, MONEY] | tempo: 0.45ms
-```
-
-### Gerando Relatório de Compliance
-
-```bash
-# Contar total de interceptações PII por tipo
-docker compose logs pii-sanitizer --no-log-prefix | \
-  grep "PII detectado" | \
-  wc -l
-
-# Exportar logs para arquivo (para auditores)
-docker compose logs pii-sanitizer --no-log-prefix > relatorio-pii-$(date +%Y%m%d).log
-```
-
 ---
 
-## 📋 Mapeamento BCB 538/2025
+## 🛠️ Troubleshooting
 
-| # | Controle Exigido (BCB 538/2025) | Implementação na PoC | Status |
-|---|---|---|---|
-| 1 | **Prevenção de Vazamento de Informações (DLP)** | PII Sanitizer intercepta e ofusca CPF, nomes, emails, telefones e valores antes de enviar ao LLM | ✅ |
-| 2 | **Rastreabilidade** | `file-log` + `correlation-id` (X-Request-ID UUID) registram cada request com trilha de auditoria | ✅ |
-| 3 | **Governança sobre Terceiros** | Kong como control plane centralizado — provedores LLM nunca recebem dados originais | ✅ |
-| 4 | **Criptografia em Trânsito** | Kong suporta TLS na porta `8443`; comunicação com Bedrock via HTTPS | ✅ |
-| 5 | **Controle de Acesso** | Kong Admin API isolada (porta `8001`); AI proxy gerencia autenticação AWS | ✅ |
-| 6 | **Gestão de Vulnerabilidades** | Container PII Sanitizer com non-root user, multi-stage build, health checks | ✅ |
-| 7 | **Segregação de Ambientes** | Rede Docker isolada (`kong-ai-net`); PII Sanitizer sem acesso externo | ✅ |
+**O LLM retorna erro HTTP 503:**
+O plugin `ai-proxy` está sem licença Enterprise. Insira sua chave trial no `KONG_LICENSE_DATA` ou execute apenas o teste isolado da camada Sanitizer: `python test_kong_proxy.py --sanitizer-only`.
 
----
+**O PII Sanitizer não está ofuscando CPFs:**
+Verifique se a requisição original está saindo no formato correto (OpenAI Chat Completions). O interceptor Lua foi desenhado especificamente para buscar o texto sensível dentro do array `messages[].content`.
 
-## 🔧 Troubleshooting
-
-### Container do Kong não sobe
-
-```bash
-# Verificar logs de erro
-docker compose logs kong-gateway --tail=50
-
-# Problema comum: YAML inválido
-docker compose exec kong-gateway kong config parse /usr/local/kong/declarative/kong.yaml
-```
-
-### PII Sanitizer retorna erro
-
-```bash
-# Verificar se o container está saudável
-docker compose ps pii-sanitizer
-
-# Testar endpoint diretamente
-curl -X POST http://localhost:8088/sanitize \
-  -H "Content-Type: application/json" \
-  -d '{"text": "CPF 123.456.789-00", "redact_type": "placeholder"}'
-
-# Ver documentação interativa
-# Abra http://localhost:8088/docs no navegador
-```
-
-### ai-proxy retorna 503
-
-O plugin `ai-proxy` requer licença Enterprise:
-
-1. Verifique se `KONG_LICENSE_DATA` está preenchido no `.env`
-2. Obtenha um trial em [konnect.konghq.com](https://konnect.konghq.com/)
-3. Enquanto isso, teste com `python test_kong_proxy.py --sanitizer-only`
-
-### Erro de credenciais AWS
-
-```bash
-# Verificar se as credenciais estão chegando ao container
-docker compose exec kong-gateway env | grep AWS
-
-# Testar acesso ao Bedrock localmente
-aws bedrock-runtime invoke-model \
-  --model-id amazon.titan-text-express-v1 \
-  --region us-east-1 \
-  --body '{"inputText":"Hello"}' \
-  output.json
-```
+**Erros de Credencial AWS (401/403):**
+Garanta que as varíaveis `AWS_ACCESS_KEY_ID` e `AWS_SECRET_ACCESS_KEY` no `.env` possuam acesso válido e a policy `bedrock:InvokeModel` anexada.
 
 ---
-
-## 📁 Estrutura do Projeto
-
-```
-kong-ai-gateway-bcb-compliance/
-├── config/
-│   └── kong.yaml                # Configuração declarativa do Kong (DB-less)
-├── pii-sanitizer/
-│   ├── Dockerfile               # Build multi-stage do serviço PII
-│   ├── requirements.txt         # Dependências Python (FastAPI, uvicorn)
-│   └── app/
-│       ├── __init__.py
-│       └── main.py              # Engine de detecção PII (regex + heurísticas)
-├── logs/                        # Volume para audit logs (git-ignored)
-├── docker-compose.yml           # Orquestração dos containers
-├── .env.example                 # Template de variáveis de ambiente
-├── .gitignore                   # Arquivos ignorados pelo Git
-├── test_kong_proxy.py           # Script de teste de integração
-└── README.md                    # Este arquivo
-```
-
----
-
-## 📄 Licença
-
-Este projeto é uma Prova de Conceito interna para compliance regulatório.
-
-**Kong Gateway Enterprise** requer licença comercial (trial de 30 dias disponível).
-O **PII Sanitizer** customizado é código proprietário da organização.
+<div align="center">
+  <p><i>Desenvolvido como Prova de Conceito para Adequação Regulatória do SFN (BCB 538/2025).</i></p>
+</div>
