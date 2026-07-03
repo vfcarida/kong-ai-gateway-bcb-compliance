@@ -1,10 +1,12 @@
 """
-PII Sanitizer Service — Kong AI Gateway PoC
-=============================================
-Serviço FastAPI para detecção e ofuscação de Informações Pessoalmente
-Identificáveis (PII) em tempo real, com foco em dados brasileiros.
+PII Sanitizer & Mock LLM Service — Kong AI Gateway PoC
+======================================================
+FastAPI service for real-time detection and obfuscation of Personally
+Identifiable Information (PII) with a focus on Brazilian data patterns,
+aligned with Resolution BCB No. 538/2025.
 
-Compliance: Resolução BCB nº 538/2025
+Also provides a mock LLM completion endpoint to completely decouple
+local testing environments from external cloud providers (AWS Bedrock/OpenAI).
 """
 
 import os
@@ -12,14 +14,13 @@ import re
 import random
 import time
 import logging
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from enum import Enum
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
-# ── Logging ──────────────────────────────────────────────────────────────────
+# ── Logging Setup ─────────────────────────────────────────────────────────────
 
 logging.basicConfig(
     level=logging.INFO,
@@ -27,19 +28,26 @@ logging.basicConfig(
 )
 logger = logging.getLogger("pii-sanitizer")
 
-# ── App ──────────────────────────────────────────────────────────────────────
+# ── App Initialization ────────────────────────────────────────────────────────
 
 app = FastAPI(
-    title="PII Sanitizer — BCB 538/2025 Compliance",
+    title="PII Sanitizer & LLM Mock — BCB 538/2025 Compliance",
     description=(
-        "Serviço de detecção e ofuscação de PII para o Kong AI Gateway. "
-        "Foco em dados brasileiros: CPF, telefones, emails, nomes e valores monetários."
+        "PII detection/obfuscation service and mock LLM provider for local testing. "
+        "Focuses on Brazilian CPFs, phone numbers, emails, names, and monetary values."
     ),
-    version="1.0.0",
+    version="2.0.0",
 )
 
+# ── Thread-Safe Global State for LLM Mocks ────────────────────────────────────
 
-# ── Models ───────────────────────────────────────────────────────────────────
+# Stores the last request payload received by the mock LLM for E2E validation.
+last_llm_request: Dict[str, Any] = {
+    "payload": None,
+    "timestamp": None,
+}
+
+# ── Pydantic Models ───────────────────────────────────────────────────────────
 
 
 class RedactType(str, Enum):
@@ -48,45 +56,41 @@ class RedactType(str, Enum):
 
 
 class SanitizeRequest(BaseModel):
-    """Requisição de sanitização de texto."""
-
-    text: str = Field(..., description="Texto a ser analisado e sanitizado")
+    """Request payload for text sanitization."""
+    text: str = Field(..., description="The raw input text to analyze and sanitize")
     redact_type: RedactType = Field(
         default=RedactType.PLACEHOLDER,
-        description="Tipo de redação: placeholder ou synthetic",
+        description="Type of redaction to apply: placeholder or synthetic",
     )
 
 
 class PIIEntity(BaseModel):
-    """Entidade PII detectada."""
-
-    type: str = Field(..., description="Tipo de PII (CPF, EMAIL, PHONE, etc.)")
-    original: str = Field(..., description="Valor original detectado")
-    replacement: str = Field(..., description="Valor substituto aplicado")
-    start: int = Field(..., description="Posição inicial no texto original")
-    end: int = Field(..., description="Posição final no texto original")
+    """Detailed metadata for a single detected PII entity."""
+    type: str = Field(..., description="Type of PII (e.g., CPF, EMAIL, PHONE, NAME, MONEY)")
+    original: str = Field(..., description="The original sensitive value matched")
+    replacement: str = Field(..., description="The obfuscated value applied in place")
+    start: int = Field(..., description="Start character index in the original text")
+    end: int = Field(..., description="End character index in the original text")
 
 
 class SanitizeResponse(BaseModel):
-    """Resposta de sanitização com metadados de auditoria."""
-
-    sanitized_text: str = Field(..., description="Texto com PII ofuscado")
-    pii_detected: list[PIIEntity] = Field(
-        default_factory=list, description="Lista de entidades PII detectadas"
+    """Sanitization response including audit metadata for compliance reports."""
+    sanitized_text: str = Field(..., description="Sanitized text with PII redacted")
+    pii_detected: List[PIIEntity] = Field(
+        default_factory=list, description="List of all detected PII entities"
     )
-    total_entities: int = Field(0, description="Total de entidades detectadas")
+    total_entities: int = Field(0, description="Total number of PII entities detected")
     processing_time_ms: float = Field(
-        0.0, description="Tempo de processamento em milissegundos"
+        0.0, description="Time taken to process the request in milliseconds"
     )
-    redact_type: str = Field("placeholder", description="Tipo de redação utilizado")
+    redact_type: str = Field("placeholder", description="Redaction method utilized")
 
 
 class HealthResponse(BaseModel):
-    """Resposta do health check."""
-
+    """System health check response."""
     status: str = "healthy"
-    service: str = "pii-sanitizer"
-    version: str = "1.0.0"
+    service: str = "pii-sanitizer-mock-llm"
+    version: str = "2.0.0"
 
 
 # ── PII Detection Engine ────────────────────────────────────────────────────
@@ -94,24 +98,24 @@ class HealthResponse(BaseModel):
 
 def _validate_cpf_digits(cpf_digits: str) -> bool:
     """
-    Valida os dígitos verificadores de um CPF.
-    Retorna True se o CPF é matematicamente válido.
+    Validates a Brazilian CPF checksum digits.
+    Returns True if mathematically valid, False otherwise.
     """
     if len(cpf_digits) != 11:
         return False
 
-    # Rejeita CPFs com todos os dígitos iguais (ex: 111.111.111-11)
+    # Exclude CPFs with all identical digits (e.g., 111.111.111-11)
     if cpf_digits == cpf_digits[0] * 11:
         return False
 
-    # Primeiro dígito verificador
+    # First verification digit calculation
     total = sum(int(cpf_digits[i]) * (10 - i) for i in range(9))
     remainder = total % 11
     first_check = 0 if remainder < 2 else 11 - remainder
     if int(cpf_digits[9]) != first_check:
         return False
 
-    # Segundo dígito verificador
+    # Second verification digit calculation
     total = sum(int(cpf_digits[i]) * (11 - i) for i in range(10))
     remainder = total % 11
     second_check = 0 if remainder < 2 else 11 - remainder
@@ -122,15 +126,15 @@ def _validate_cpf_digits(cpf_digits: str) -> bool:
 
 
 def _generate_synthetic_cpf() -> str:
-    """Gera um CPF falso mas matematicamente válido (formato XXX.XXX.XXX-XX)."""
+    """Generates a mathematically valid, synthetic Brazilian CPF (XXX.XXX.XXX-XX)."""
     digits = [random.randint(0, 9) for _ in range(9)]
 
-    # Primeiro dígito verificador
+    # First checksum digit
     total = sum(digits[i] * (10 - i) for i in range(9))
     remainder = total % 11
     digits.append(0 if remainder < 2 else 11 - remainder)
 
-    # Segundo dígito verificador
+    # Second checksum digit
     total = sum(digits[i] * (11 - i) for i in range(10))
     remainder = total % 11
     digits.append(0 if remainder < 2 else 11 - remainder)
@@ -140,14 +144,14 @@ def _generate_synthetic_cpf() -> str:
 
 
 def _generate_synthetic_email() -> str:
-    """Gera um email falso coerente."""
-    names = ["usuario", "contato", "cliente", "admin", "suporte"]
-    domains = ["exemplo.com.br", "dominio.com", "teste.org.br"]
+    """Generates a realistic, synthetic email address."""
+    names = ["user", "contact", "client", "admin", "support", "manager"]
+    domains = ["example.com.br", "domain.com", "test.org.br", "sandbox.net"]
     return f"{random.choice(names)}{random.randint(100, 999)}@{random.choice(domains)}"
 
 
 def _generate_synthetic_phone() -> str:
-    """Gera um telefone brasileiro falso."""
+    """Generates a realistic, synthetic Brazilian phone number."""
     ddd = random.randint(11, 99)
     num = random.randint(90000, 99999)
     suffix = random.randint(1000, 9999)
@@ -155,45 +159,45 @@ def _generate_synthetic_phone() -> str:
 
 
 def _generate_synthetic_name() -> str:
-    """Gera um nome brasileiro falso."""
-    first_names = ["Carlos", "Ana", "Pedro", "Mariana", "Lucas", "Juliana", "Rafael"]
-    last_names = ["Ferreira", "Souza", "Costa", "Almeida", "Pereira", "Barbosa"]
+    """Generates a realistic, synthetic Brazilian name."""
+    first_names = ["Carlos", "Ana", "Pedro", "Mariana", "Lucas", "Juliana", "Rafael", "Beatriz"]
+    last_names = ["Ferreira", "Souza", "Costa", "Almeida", "Pereira", "Barbosa", "Silva", "Santos"]
     return f"{random.choice(first_names)} {random.choice(last_names)}"
 
 
 def _generate_synthetic_money() -> str:
-    """Gera um valor monetário falso."""
+    """Generates a synthetic Brazilian Real currency value."""
     value = random.randint(100, 99999)
     return f"R$ {value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
-# Padrões PII ordenados por prioridade (mais específicos primeiro)
-PII_PATTERNS: list[tuple[str, re.Pattern, int]] = [
-    # CPF formatado: 123.456.789-00
+# Ordered PII detection patterns (more specific patterns go first)
+PII_PATTERNS: List[tuple[str, re.Pattern, int]] = [
+    # Formatted Brazilian CPF: 123.456.789-00
     (
         "CPF",
         re.compile(r"\d{3}\.\d{3}\.\d{3}-\d{2}"),
         0,
     ),
-    # CPF numérico puro: 12345678900 (11 dígitos exatos, word boundary)
+    # Raw numeric CPF: 12345678900 (11 exact digits with word boundaries)
     (
         "CPF",
         re.compile(r"\b\d{11}\b"),
         1,
     ),
-    # Email
+    # Email addresses
     (
         "EMAIL",
         re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"),
         0,
     ),
-    # Telefone brasileiro: (11) 99876-5432, 11 99876-5432, (11) 9876-5432
+    # Brazilian phone numbers: (11) 99876-5432, 11 99876-5432, (11) 9876-5432, etc.
     (
         "PHONE",
         re.compile(r"\(?\d{2}\)?\s?\d{4,5}-?\d{4}"),
         0,
     ),
-    # Valor monetário: R$ 50.000, R$ 1.234,56, R$ 50000
+    # Currency values: R$ 50.000, R$ 1.234,56, etc.
     (
         "MONEY",
         re.compile(r"R\$\s?[\d.,]+"),
@@ -201,13 +205,12 @@ PII_PATTERNS: list[tuple[str, re.Pattern, int]] = [
     ),
 ]
 
-# Padrão para detecção heurística de nomes próprios brasileiros
-# Detecta sequências de 2+ palavras capitalizadas (min 2 chars cada)
+# Pattern for heuristic detection of Brazilian proper names (capitalized words)
 NAME_PATTERN = re.compile(
     r"\b([A-ZÀ-Ú][a-zà-ú]{1,}(?:\s(?:da|de|do|dos|das|e)\s)?[A-ZÀ-Ú][a-zà-ú]{1,}(?:\s[A-ZÀ-Ú][a-zà-ú]{1,})*)\b"
 )
 
-# Palavras que NÃO são nomes próprios (falsos positivos comuns em Português)
+# Common Portuguese stopwords/false-positives to filter out from name matches
 NAME_STOPWORDS = {
     "Meu", "Minha", "Meus", "Minhas",
     "Seu", "Sua", "Seus", "Suas",
@@ -221,49 +224,46 @@ NAME_STOPWORDS = {
     "Amazon Bedrock", "Kong Gateway",
 }
 
+# Pre-normalized set for O(1) stopword lookup (Optimization: eliminates O(M) sub-loop check)
+NORMALIZED_STOPWORDS = {sw.lower() for sw in NAME_STOPWORDS}
+
 
 def detect_and_sanitize(text: str, redact_type: RedactType) -> SanitizeResponse:
     """
-    Detecta e ofusca PII no texto fornecido.
+    Scans, detects, and obfuscates PII in the given input text.
 
-    Estratégia:
-    1. Varre o texto com regex para cada tipo de PII
-    2. Coleta todas as matches com posições
-    3. Resolve conflitos (matches sobrepostos — mantém o mais específico)
-    4. Substitui de trás para frente para preservar posições
+    Strategy:
+    1. Scan input string with regex compiled patterns.
+    2. Collect matches and their positions.
+    3. Run optimized conflict resolution for overlapping matches.
+    4. Perform string replacement in reverse order to preserve string indices.
     """
     start_time = time.perf_counter()
-    entities: list[PIIEntity] = []
-    counters: dict[str, int] = {}
+    entities: List[PIIEntity] = []
+    counters: Dict[str, int] = {}
+    raw_matches: List[tuple[str, int, int, str, int]] = []
 
-    # Coletar todas as matches de padrões regex
-    raw_matches: list[tuple[str, int, int, str, int]] = []
-
+    # 1. Regex scanning
     for pii_type, pattern, priority in PII_PATTERNS:
         for match in pattern.finditer(text):
             value = match.group()
-
-            # Validação extra para CPF numérico: evitar falsos positivos
-            if pii_type == "CPF" and priority == 1:
-                # CPF numérico (11 dígitos) — validar dígitos verificadores
-                # Aceita mesmo CPFs inválidos na PoC para demonstração,
-                # mas sinaliza com score menor
-                pass
-
             raw_matches.append((pii_type, match.start(), match.end(), value, priority))
 
-    # Detectar nomes próprios
+    # 2. Proper name heuristic scanning
     for match in NAME_PATTERN.finditer(text):
         name = match.group()
-        # Filtrar falsos positivos
-        if name not in NAME_STOPWORDS and not any(
-            sw in name for sw in NAME_STOPWORDS
-        ):
+        # Optimization: split words and lookup in the pre-normalized stopwords set (O(1) average lookup)
+        name_lower = name.lower()
+        words = name_lower.split()
+        is_stopword = name_lower in NORMALIZED_STOPWORDS or any(w in NORMALIZED_STOPWORDS for w in words)
+        
+        if not is_stopword:
             raw_matches.append(("NAME", match.start(), match.end(), name, 10))
 
-    # Ordenar por posição e resolver sobreposições (manter match mais específico)
-    raw_matches.sort(key=lambda m: (m[1], -m[4]))  # por posição, depois prioridade
-    filtered_matches: list[tuple[str, int, int, str, int]] = []
+    # 3. Conflict resolution: sort by position ascending, then priority descending
+    # Keeping the more specific match (lower priority integer means higher specificity)
+    raw_matches.sort(key=lambda m: (m[1], -m[4]))
+    filtered_matches: List[tuple[str, int, int, str, int]] = []
     last_end = -1
 
     for pii_type, start, end, value, priority in raw_matches:
@@ -271,7 +271,7 @@ def detect_and_sanitize(text: str, redact_type: RedactType) -> SanitizeResponse:
             filtered_matches.append((pii_type, start, end, value, priority))
             last_end = end
 
-    # Gerar substituições e construir entidades (de trás para frente)
+    # 4. Generate obfuscated replacements (reverse order replacement preserves indices)
     sanitized = text
     for pii_type, start, end, value, _priority in reversed(filtered_matches):
         counters[pii_type] = counters.get(pii_type, 0) + 1
@@ -294,7 +294,7 @@ def detect_and_sanitize(text: str, redact_type: RedactType) -> SanitizeResponse:
 
         sanitized = sanitized[:start] + replacement + sanitized[end:]
 
-    # Reverter a lista para ordem de aparição
+    # Reverse the entities back to original chronological order of appearance
     entities.reverse()
 
     elapsed_ms = (time.perf_counter() - start_time) * 1000
@@ -309,7 +309,7 @@ def detect_and_sanitize(text: str, redact_type: RedactType) -> SanitizeResponse:
 
 
 def _get_synthetic_replacement(pii_type: str) -> str:
-    """Retorna um valor sintético coerente para o tipo de PII."""
+    """Returns a dynamic synthetic mock value aligned with the requested PII type."""
     generators = {
         "CPF": _generate_synthetic_cpf,
         "EMAIL": _generate_synthetic_email,
@@ -318,44 +318,31 @@ def _get_synthetic_replacement(pii_type: str) -> str:
         "MONEY": _generate_synthetic_money,
     }
     generator = generators.get(pii_type)
-    if generator:
-        return generator()
-    return f"[SYNTHETIC_{pii_type}]"
+    return generator() if generator else f"[SYNTHETIC_{pii_type}]"
 
 
-# ── Routes ───────────────────────────────────────────────────────────────────
+# ── REST API Endpoints ────────────────────────────────────────────────────────
 
 
-@app.get("/health", response_model=HealthResponse, tags=["Operacional"])
+@app.get("/health", response_model=HealthResponse, tags=["Operational"])
 async def health_check():
-    """Health check para Docker Compose e monitoramento."""
+    """Health check endpoint for container clustering and readiness checks."""
     return HealthResponse()
 
 
-@app.post("/sanitize", response_model=SanitizeResponse, tags=["PII"])
+@app.post("/sanitize", response_model=SanitizeResponse, tags=["PII Engine"])
 async def sanitize_text(request: SanitizeRequest):
     """
-    Analisa e ofusca PII no texto fornecido.
-
-    Tipos de PII detectados:
-    - **CPF** (formatado e numérico)
-    - **Email**
-    - **Telefone** (formato brasileiro)
-    - **Nome próprio** (heurística)
-    - **Valor monetário** (R$)
-
-    Modos de redação:
-    - `placeholder`: substitui por `[REDACTED_TYPE_N]`
-    - `synthetic`: gera dados falsos coerentes
+    Performs real-time text analysis to intercept and redact Brazilian PII data.
     """
     if not request.text or not request.text.strip():
-        raise HTTPException(status_code=400, detail="O campo 'text' não pode ser vazio.")
+        raise HTTPException(status_code=400, detail="The input 'text' field cannot be empty.")
 
     result = detect_and_sanitize(request.text, request.redact_type)
 
     if result.total_entities > 0:
         logger.info(
-            "PII detectado: %d entidades [%s] | tempo: %.2fms",
+            "PII Intercepted: %d entities [%s] | latency: %.2fms",
             result.total_entities,
             ", ".join(e.type for e in result.pii_detected),
             result.processing_time_ms,
@@ -364,22 +351,85 @@ async def sanitize_text(request: SanitizeRequest):
     return result
 
 
-@app.get("/", tags=["Operacional"])
-async def root():
-    """Endpoint raiz com informações do serviço."""
+# ── Mock LLM & Testing Endpoints ──────────────────────────────────────────────
+
+
+@app.post("/mock-llm/v1/chat/completions", tags=["Mock LLM"])
+@app.post("/mock-llm", tags=["Mock LLM"])
+async def mock_llm_completion(request: Request):
+    """
+    Mock LLM completions endpoint mimicking OpenAI/Bedrock.
+    Captures request body for automated verification of compliance/sanitization.
+    """
+    body_json = None
+    try:
+        body_json = await request.json()
+    except Exception:
+        body_bytes = await request.body()
+        body_str = body_bytes.decode("utf-8") if isinstance(body_bytes, bytes) else str(body_bytes)
+        body_json = {"raw_payload": body_str}
+
+    # Record request parameters to inspect PII interception state
+    last_llm_request["payload"] = body_json
+    last_llm_request["timestamp"] = time.time()
+
+    logger.info("Mock LLM received request payload: %s", str(body_json)[:300])
+
     return {
-        "service": "PII Sanitizer",
-        "version": "1.0.0",
+        "id": "chatcmpl-mock-bcb-538-2025",
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": "mock-compliance-llm",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Compliance verification: This is a safe response generated by the local Mock LLM."
+                },
+                "finish_reason": "stop"
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 15,
+            "completion_tokens": 15,
+            "total_tokens": 30
+        }
+    }
+
+
+@app.get("/mock-llm/last-request", tags=["Mock LLM"])
+async def get_last_llm_request():
+    """Retrieves the last request payload forwarded to the mock LLM."""
+    return last_llm_request
+
+
+@app.post("/mock-llm/reset", tags=["Mock LLM"])
+async def reset_last_llm_request():
+    """Resets the mock LLM request history to clean up testing states."""
+    last_llm_request["payload"] = None
+    last_llm_request["timestamp"] = None
+    logger.info("Mock LLM state reset.")
+    return {"status": "reset"}
+
+
+@app.get("/", tags=["Operational"])
+async def root():
+    """Landing route returning service state and OpenAPI documentation pointers."""
+    return {
+        "service": "PII Sanitizer & Mock LLM Controller",
+        "version": "2.0.0",
         "compliance": "BCB 538/2025",
         "docs": "/docs",
         "endpoints": {
             "sanitize": "POST /sanitize",
             "health": "GET /health",
+            "mock_llm": "POST /mock-llm/v1/chat/completions",
+            "mock_llm_last_request": "GET /mock-llm/last-request",
+            "mock_llm_reset": "POST /mock-llm/reset"
         },
     }
 
-
-# ── Startup ──────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import uvicorn
@@ -388,6 +438,6 @@ if __name__ == "__main__":
         "app.main:app",
         host="0.0.0.0",
         port=int(os.getenv("PORT", "8088")),
-        reload=True,
+        reload=False,
         log_level="info",
     )

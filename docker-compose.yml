@@ -63,14 +63,14 @@ services:
       AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY:-}"
       AWS_REGION: "${AWS_REGION:-us-east-1}"
 
-      # PII Sanitizer config (usado pelo pre-function Lua)
+      # PII Sanitizer config
       PII_REDACT_TYPE: "${PII_REDACT_TYPE:-placeholder}"
+      ENABLE_NATIVE_SANITIZER: "${ENABLE_NATIVE_SANITIZER:-false}"
 
-      # AI Model (usado pelo kong.yaml com env vars)
-      DECK_AI_MODEL_NAME: "${AI_MODEL_NAME:-amazon.titan-text-express-v1}"
-      DECK_AWS_REGION: "${AWS_REGION:-us-east-1}"
-      DECK_AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID:-}"
-      DECK_AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY:-}"
+      # AI Model Configuration
+      AI_PROVIDER: "${AI_PROVIDER:-bedrock}"
+      AI_MODEL_NAME: "${AI_MODEL_NAME:-amazon.titan-text-express-v1}"
+      AI_UPSTREAM_URL: "${AI_UPSTREAM_URL:-}"
 
       # DNS (resolver nomes de containers na rede Docker)
       KONG_DNS_RESOLVER: ""

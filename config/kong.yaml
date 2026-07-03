@@ -166,15 +166,52 @@ services:
                   redact_type = redact_type,
                   timestamp = ngx.now(),
                 }
+                
+                -- Inject compliance metrics directly into Kong log serialization structure.
+                -- This ensures observability pipelines capture the regulatory events.
+                kong.log.set_serialize_value("ai.sanitizer.pii_identified", total_pii_count)
+                kong.log.set_serialize_value("ai.sanitizer.pii_sanitized", total_pii_count)
+                
+                local pii_types_list = {}
+                for k, v in pairs(pii_types) do
+                  table.insert(pii_types_list, k)
+                end
+                kong.log.set_serialize_value("ai.sanitizer.pii_types", pii_types_list)
               end
 
       # ┌─────────────────────────────────────────────────────────────────────┐
-      # │  2. AI-PROXY: Roteamento transparente ao AWS Bedrock               │
+      # │  2. NATIVE AI-SANITIZER: Enterprise Native Obfuscation              │
       # │                                                                     │
-      # │  Gerencia autenticação SigV4 e tradução de formato para o          │
-      # │  provedor AWS Bedrock. Modelo configurável via variável de env.    │
+      # │  To activate this plugin:                                           │
+      # │   1. Change 'enabled: false' to 'enabled: true'                     │
+      # │   2. Ensure a valid Kong Enterprise license is active.              │
+      # └─────────────────────────────────────────────────────────────────────┘
+      - name: ai-sanitizer
+        enabled: false
+        config:
+          host: "pii-sanitizer"
+          port: 8088
+          scheme: "http"
+          sanitization_mode: "INPUT"
+          redact_type: "{vault://env/PII_REDACT_TYPE}"
+          anonymize:
+            - "general"
+            - "phone"
+            - "email"
+            - "custom"
+          custom_patterns:
+            - name: "cpf-formatted"
+              regex: "\\d{3}\\.\\d{3}\\.\\d{3}-\\d{2}"
+              score: 1.0
+            - name: "cpf-numeric"
+              regex: "\\b\\d{11}\\b"
+              score: 1.0
+
+      # ┌─────────────────────────────────────────────────────────────────────┐
+      # │  3. AI-PROXY: Roteamento dinâmico/decoupled a LLMs                  │
       # │                                                                     │
-      # │  ⚠️  Requer licença Enterprise (trial 30 dias disponível).         │
+      # │  Usa Kong Env Vault para evitar credenciais/URLs hardcoded.        │
+      # │  Permite testes locais mudando o provider para mock.                │
       # └─────────────────────────────────────────────────────────────────────┘
       - name: ai-proxy
         config:
@@ -182,11 +219,15 @@ services:
           auth:
             allow_override: false
           model:
-            provider: "bedrock"
-            name: "amazon.titan-text-express-v1"
+            provider: "{vault://env/AI_PROVIDER}"
+            name: "{vault://env/AI_MODEL_NAME}"
             options:
               bedrock:
-                aws_region: "us-east-1"
+                aws_region: "{vault://env/AWS_REGION}"
+                aws_access_key_id: "{vault://env/AWS_ACCESS_KEY_ID}"
+                aws_secret_access_key: "{vault://env/AWS_SECRET_ACCESS_KEY}"
+              openai:
+                upstream_url: "{vault://env/AI_UPSTREAM_URL}"
           logging:
             log_statistics: true
             log_payloads: false
