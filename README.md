@@ -38,7 +38,7 @@
 
 ---
 
-## 🔎 Executive Summary
+## 🔎 Strategic Overview
 
 ### The Challenge
 Corporate applications increasingly query Large Language Models (LLMs) via direct cloud SDK connections (e.g., AWS Bedrock). This pattern introduces tight coupling and, more critically, privacy blind spots where sensitive customer PII can accidentally leak into prompts.
