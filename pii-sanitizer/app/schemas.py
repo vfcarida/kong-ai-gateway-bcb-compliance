@@ -31,6 +31,10 @@ class PIIEntity(BaseModel):
     replacement: str = Field(..., description="Obfuscated replacement string applied")
     start: int = Field(..., description="Start character offset")
     end: int = Field(..., description="End character offset")
+    checksum_valid: Optional[bool] = Field(
+        default=None,
+        description="Result of checksum validation for CPF/CNPJ (None if not applicable)",
+    )
 
 
 class SanitizeResponse(BaseModel):

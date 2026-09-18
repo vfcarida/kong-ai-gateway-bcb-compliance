@@ -43,7 +43,9 @@ services:
           timeout_ms: 5000
           redact_type: "{vault://env/PII_REDACT_TYPE}"
           cache_ttl_seconds: 300
-          fail_open: true
+          fail_open: false
+          # Opt-in fail-open override example (requires documented risk acceptance per route):
+          # fail_open: true # RISK ACCEPTANCE: May forward unredacted prompts if sanitizer microservice is unavailable
 
       # ── 2. OpenTelemetry GenAI Privacy Scrubber ──────────────────────────────
       - name: bcb-otel-scrubber

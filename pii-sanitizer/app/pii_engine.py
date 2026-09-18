@@ -130,12 +130,29 @@ PII_PATTERNS: List[Tuple[str, re.Pattern, int]] = [
     ("CNPJ", re.compile(r"\b\d{14}\b"), 1),
     # Email
     ("EMAIL", re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"), 0),
-    # Phone numbers
-    ("PHONE", re.compile(r"\(?\d{2}\)?\s?\d{4,5}-?\d{4}"), 0),
-    # Currency
-    ("MONEY", re.compile(r"R\$\s?[\d.,]+"), 0),
-    # Bank Account
-    ("BANK_ACCOUNT", re.compile(r"(?i)\b(?:ag(?:ência)?|conta|c/c)\s*:?\s*\d{3,5}[-\s]?\d{3,7}[-\s]?[0-9kK]?\b"), 0),
+    # Phone numbers: captures Brazilian mobile/landline formats while excluding arbitrary digit sequences
+    (
+        "PHONE",
+        re.compile(
+            r"(?:\([1-9]{2}\)\s?|\b[1-9]{2}\s?)(?:9\d{4}|[2-5]\d{3})[-\s]?\d{4}\b|\b(?:9\d{4}|[2-5]\d{3})-\d{4}\b"
+        ),
+        0,
+    ),
+    # Currency: trimmed so trailing punctuation (. or ,) is never captured
+    ("MONEY", re.compile(r"R\$\s?[\d.,]*\d"), 0),
+    # Compound Bank Account: keyword-separated (e.g. Agência <digits> ... Conta <digits>-<dig>)
+    (
+        "BANK_ACCOUNT",
+        re.compile(
+            r"\b(?:ag(?:[eê]ncia|\.)?|ag)\s*:?\s*\d{1,5}(?:-[0-9kKxX])?\s*[,/]?\s+(?:(?:op(?:era[cç][aã]o)?\s*:?\s*\d{1,4}\s+)?(?:conta(?:\s*corrente)?|c/c|cc|cta)\b\.?\s*:?\s*\d{3,9}(?:-[0-9kKxX])?)\b"
+            r"|"
+            r"\b(?:conta(?:\s*corrente)?|c/c|cc|cta)\b\.?\s*:?\s*\d{3,9}(?:-[0-9kKxX])?\s*[,/]?\s+(?:ag(?:[eê]ncia|\.)?|ag)\s*:?\s*\d{1,5}(?:-[0-9kKxX])?\b",
+            re.IGNORECASE,
+        ),
+        2,
+    ),
+    # Contiguous Bank Account
+    ("BANK_ACCOUNT", re.compile(r"\b(?:ag(?:ência)?|conta|c/c)\s*:?\s*\d{3,5}[-\s]?\d{3,7}[-\s]?[0-9kK]?\b", re.IGNORECASE), 0),
 ]
 
 NAME_PATTERN = re.compile(
@@ -159,13 +176,37 @@ def detect_and_sanitize(text: str, redact_type: RedactType) -> SanitizeResponse:
     start_time = time.perf_counter()
     entities: List[PIIEntity] = []
     counters: Dict[str, int] = {}
-    raw_matches: List[Tuple[str, int, int, str, int]] = []
+    raw_matches: List[Tuple[str, int, int, str, int, Optional[bool]]] = []
 
     # 1. Regex scanning
     for pii_type, pattern, priority in PII_PATTERNS:
         for match in pattern.finditer(text):
             value = match.group()
-            raw_matches.append((pii_type, match.start(), match.end(), value, priority))
+            checksum_valid: Optional[bool] = None
+
+            if pii_type == "CPF":
+                digits = re.sub(r"\D", "", value)
+                is_valid = validate_cpf_digits(digits)
+                is_raw = bool(re.match(r"^\d{11}$", value))
+                if is_raw:
+                    if not is_valid:
+                        continue  # Raw 11-digit numbers are only treated as CPF if checksum passes
+                    checksum_valid = True
+                else:
+                    checksum_valid = is_valid
+
+            elif pii_type == "CNPJ":
+                digits = re.sub(r"\D", "", value)
+                is_valid = validate_cnpj_digits(digits)
+                is_raw = bool(re.match(r"^\d{14}$", value))
+                if is_raw:
+                    if not is_valid:
+                        continue  # Raw 14-digit numbers are only treated as CNPJ if checksum passes
+                    checksum_valid = True
+                else:
+                    checksum_valid = is_valid
+
+            raw_matches.append((pii_type, match.start(), match.end(), value, priority, checksum_valid))
 
     # 2. Name heuristic scanning
     for match in NAME_PATTERN.finditer(text):
@@ -174,21 +215,21 @@ def detect_and_sanitize(text: str, redact_type: RedactType) -> SanitizeResponse:
         words = name_lower.split()
         is_stop = name_lower in NORMALIZED_STOPWORDS or any(w in NORMALIZED_STOPWORDS for w in words)
         if not is_stop:
-            raw_matches.append(("NAME", match.start(), match.end(), name, 10))
+            raw_matches.append(("NAME", match.start(), match.end(), name, 10, None))
 
     # 3. Conflict resolution
     raw_matches.sort(key=lambda m: (m[1], -m[4]))
-    filtered_matches: List[Tuple[str, int, int, str, int]] = []
+    filtered_matches: List[Tuple[str, int, int, str, int, Optional[bool]]] = []
     last_end = -1
 
-    for pii_type, start, end, value, priority in raw_matches:
+    for pii_type, start, end, value, priority, checksum_valid in raw_matches:
         if start >= last_end:
-            filtered_matches.append((pii_type, start, end, value, priority))
+            filtered_matches.append((pii_type, start, end, value, priority, checksum_valid))
             last_end = end
 
     # 4. Replacement in reverse order
     sanitized = text
-    for pii_type, start, end, value, _ in reversed(filtered_matches):
+    for pii_type, start, end, value, _, checksum_valid in reversed(filtered_matches):
         counters[pii_type] = counters.get(pii_type, 0) + 1
         idx = counters[pii_type]
 
@@ -204,6 +245,7 @@ def detect_and_sanitize(text: str, redact_type: RedactType) -> SanitizeResponse:
                 replacement=replacement,
                 start=start,
                 end=end,
+                checksum_valid=checksum_valid,
             )
         )
         sanitized = sanitized[:start] + replacement + sanitized[end:]

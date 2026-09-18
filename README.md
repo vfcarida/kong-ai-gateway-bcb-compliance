@@ -202,6 +202,12 @@ Native detection targeting:
   - `placeholder`: Replaces items with `[REDACTED_CPF_1]`, `[REDACTED_BANK_ACCOUNT_1]`.
   - `synthetic`: Dynamically generates mathematically valid fake credentials to maintain reasoning context for the LLM.
 
+#### Ingress Message Coverage & Labelled Non-Goal (Response Body Scrubbing)
+- **Universal Role & Structure Coverage**: Ingress inspection scans all message roles (`system`, `user`, `assistant`, `developer`, `tool`) and traverses both standard string content and OpenAI structured array content parts (`[{type="text", text=...}]`), rewriting sensitive tokens in-place.
+- **Labelled Non-Goal (Response Body Scrubbing)**:
+  - **Technical Rationale**: In OpenResty/Nginx, the `body_filter_by_lua` phase executes in a streaming chunk filter context where network cosockets are disabled (`API disabled in the context of body_filter`). Invoking an external microservice like `pii-sanitizer` from `body_filter` is architecturally prohibited. Additionally, modern LLM inference relies on Server-Sent Events (SSE) streaming (`stream: true`), where token fragments arrive across arbitrary TCP boundaries; buffering or reconstructing partial streams degrades Time-To-First-Token (TTFT) latency and risks breaking SSE protocol framing.
+  - **Residual Risk & Mitigation**: The residual risk is model-echoed PII. Under BCB CMN 4893/21 and BCB 85/21, strict ingress perimeter control guarantees that no customer PII reaches external models, eliminating the source material for model-echoed data leaks. Pure in-memory Lua response filtering for non-streaming endpoints is reserved for future extensions.
+
 ### 2. Multi-Provider LLM Abstraction & Automatic Failover (Availability)
 Implements dynamic upstream fallback paths:
 1. **Primary**: OpenAI / Azure OpenAI

@@ -42,7 +42,7 @@ return {
             fail_open = {
               type = "boolean",
               required = true,
-              default = true,
+              default = false,
             },
           },
         },
