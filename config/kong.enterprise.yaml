@@ -1,17 +1,19 @@
 # ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║  Kong AI Gateway — Declarative Configuration (decK v3.0)                    ║
+# ║  Kong AI Gateway — Enterprise Declarative Configuration (decK v3.0)         ║
 # ║  Compliance Framework: BCB CMN 4893/21 & BCB 85/21                           ║
 # ║                                                                            ║
-# ║  Configured Plugins & Features:                                            ║
-# ║   1. bcb-pii-sanitizer: Pre-request PII detection & obfuscation            ║
-# ║   2. bcb-otel-scrubber: GenAI privacy log serialization scrubber (Custom)   ║
-# ║   3. opentelemetry: Distributed tracing export to OTel Collector (OSS)      ║
-# ║   4. ai-prompt-guard: Semantic guardrails against prompt injection (LLM01) ║
-# ║   5. ai-semantic-cache: Redis Vector Search caching (FinOps optimization)  ║
-# ║   6. ai-rate-limiting-advanced: Token-based budgets (OWASP LLM10)          ║
-# ║   7. ai-proxy: Provider abstraction & SigV4 / bearer authentication        ║
-# ║   8. file-log: Regulatory audit log serialization                         ║
-# ║   9. correlation-id: Request tracking & structured audit logging           ║
+# ║  ⚠️ ENTERPRISE LICENSE & INFRASTRUCTURE PREREQUISITES:                       ║
+# ║   1. KONG_LICENSE_DATA: Must be populated with a valid Kong Enterprise       ║
+# ║      license payload in .env or container environment.                     ║
+# ║   2. Redis Vector Database: Requires redis-vector running RedisStack 7.2+   ║
+# ║      with RediSearch index capability on port 6379.                         ║
+# ║   3. OpenAI Embeddings Key: OPENAI_API_KEY required to compute vectors      ║
+# ║      via text-embedding-3-small for semantic cache lookups.                 ║
+# ║                                                                            ║
+# ║  Features Included:                                                        ║
+# ║   • All OSS Plugins (PII Sanitizer, OTel Scrubber, AI Proxy, Audit Log)      ║
+# ║   • ai-semantic-cache (Enterprise FinOps Vector Caching)                    ║
+# ║   • ai-rate-limiting-advanced (Enterprise Token Budget Limiter - OWASP 10)   ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
 _format_version: "3.0"
@@ -80,7 +82,8 @@ services:
             - "(?i)reveal\\s+system\\s+prompt"
           match_all_roles: true
 
-      # ── 5. AI Semantic Cache (FinOps Vector Search Cache) ───────────────────
+      # ── 5. AI Semantic Cache (Enterprise FinOps Vector Cache) ───────────────
+      # Requires: Kong Enterprise License + Redis Vector DB + OpenAI Embeddings
       - name: ai-semantic-cache
         config:
           embeddings:
@@ -95,7 +98,8 @@ services:
               port: 6379
               distance_threshold: 0.85
 
-      # ── 6. AI Token Rate Limiting (OWASP LLM10:2025 Unbounded Consumption) ──
+      # ── 6. AI Token Rate Limiting (Enterprise OWASP LLM10 Token Budgets) ────
+      # Requires: Kong Enterprise License + Redis backend
       - name: ai-rate-limiting-advanced
         config:
           llm_providers:

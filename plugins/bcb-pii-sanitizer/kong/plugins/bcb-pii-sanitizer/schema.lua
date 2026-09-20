@@ -13,7 +13,14 @@ return {
             sanitizer_url = {
               type = "string",
               required = true,
-              default = "http://pii-sanitizer:8088/sanitize",
+              default = "https://pii-sanitizer:8443/sanitize",
+            },
+          },
+          {
+            ssl_verify = {
+              type = "boolean",
+              required = true,
+              default = false,
             },
           },
           {

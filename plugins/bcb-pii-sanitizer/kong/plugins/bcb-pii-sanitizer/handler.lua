@@ -71,6 +71,7 @@ local function sanitize_single_text(text, config, cache, redact_type)
   local res, req_err = httpc:request_uri(config.sanitizer_url, {
     method = "POST",
     body = req_payload,
+    ssl_verify = config.ssl_verify ~= nil and config.ssl_verify or false,
     headers = {
       ["Content-Type"] = "application/json",
       ["Accept"] = "application/json",

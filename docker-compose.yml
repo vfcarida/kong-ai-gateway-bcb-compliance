@@ -1,44 +1,34 @@
 # ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║  Kong AI Gateway — Enterprise Docker Compose Architecture                    ║
+# ║  Kong AI Gateway — Dual-Profile Docker Compose Architecture                 ║
 # ║  Compliance Framework: BCB CMN 4893/21 & BCB 85/21                           ║
 # ║                                                                            ║
-# ║  Services:                                                                 ║
-# ║   • kong-gateway    — AI Gateway Control & Data Plane (DB-less 3.14 LTS)  ║
-# ║   • pii-sanitizer   — Fast PII Inspection Microservice (FastAPI 3.10+)    ║
-# ║   • redis-vector    — Vector Cache for FinOps & Rate-Limiting Engine       ║
-# ║   • otel-collector  — OpenTelemetry Collector with Privacy Scrubbing       ║
+# ║  PROFILES AVAILABLE:                                                        ║
+# ║   1. oss        — License-free Community Edition (kong:3.14)               ║
+# ║                   Runs PII Sanitizer + OTel Scrubber + Prompt Guard + Proxy  ║
+# ║                   docker compose --profile oss up                           ║
+# ║   2. enterprise — Full Enterprise Suite (kong/kong-gateway:3.14)            ║
+# ║                   Includes Semantic Vector Cache + Token Rate Limiting      ║
+# ║                   Requires KONG_LICENSE_DATA + Redis Vector Search          ║
+# ║                   docker compose --profile enterprise up                    ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
 services:
-  # ── Redis Vector Search Backend (FinOps & Rate Limiting) ──────────────────────
-  redis-vector:
-    image: redis/redis-stack-server:latest
-    container_name: redis-vector
-    ports:
-      - "6379:6379"
-    networks:
-      - kong-ai-net
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-
-  # ── PII Sanitizer (FastAPI 3.10+) ──────────────────────────────────────────
+  # ── PII Sanitizer Microservice (FastAPI 3.10+ / TLS Terminated) ──────────────
   pii-sanitizer:
     build:
       context: ./pii-sanitizer
       dockerfile: Dockerfile
     container_name: pii-sanitizer
     environment:
-      - PORT=8088
+      - PORT=8443
+      - SSL_KEYFILE=/app/certs/dev-key.pem
+      - SSL_CERTFILE=/app/certs/dev-cert.pem
     ports:
-      - "8088:8088"
+      - "8088:8443" # Host port 8088 maps to container HTTPS port 8443 (diagnostics / verify plaintext rejection)
     networks:
       - kong-ai-net
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8088/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request, ssl; ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE; urllib.request.urlopen('https://localhost:8443/health', context=ctx)"]
       interval: 10s
       timeout: 5s
       start_period: 10s
@@ -59,21 +49,37 @@ services:
       - kong-ai-net
     restart: unless-stopped
 
-  # ── Kong Gateway Enterprise (DB-less) ──────────────────────────────────────
-  kong-gateway:
-    image: kong/kong-gateway:3.14
-    container_name: kong-gateway
+  # ── Redis Vector Search Backend (Enterprise FinOps & Rate Limiting) ──────────
+  redis-vector:
+    profiles: ["enterprise"]
+    image: redis/redis-stack-server:latest
+    container_name: redis-vector
+    ports:
+      - "6379:6379"
+    networks:
+      - kong-ai-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ── Kong Gateway OSS (License-Free Community Profile) ────────────────────────
+  kong-gateway-oss:
+    profiles: ["oss"]
+    image: kong:3.14
+    container_name: kong-gateway-oss
     environment:
       KONG_DATABASE: "off"
-      KONG_DECLARATIVE_CONFIG: /usr/local/kong/declarative/kong.yaml
+      KONG_DECLARATIVE_CONFIG: /usr/local/kong/declarative/kong.oss.yaml
       KONG_PLUGINS: "bundled,bcb-pii-sanitizer,bcb-otel-scrubber"
       KONG_LUA_PACKAGE_PATH: "/usr/local/share/lua/5.1/?.lua;/usr/local/share/lua/5.1/?/init.lua;;"
 
-      KONG_LICENSE_DATA: "${KONG_LICENSE_DATA:-}"
-
       KONG_PROXY_LISTEN: "0.0.0.0:8000, 0.0.0.0:8443 ssl"
-      KONG_ADMIN_LISTEN: "0.0.0.0:8001, 0.0.0.0:8444 ssl"
-      KONG_ADMIN_GUI_LISTEN: "0.0.0.0:8002"
+      # BCB CMN 4893/21 Hardening: Bind Admin plane to loopback only
+      KONG_ADMIN_LISTEN: "127.0.0.1:8001, 127.0.0.1:8444 ssl"
+      KONG_ADMIN_GUI_LISTEN: "127.0.0.1:8002"
 
       KONG_LOG_LEVEL: info
       KONG_PROXY_ACCESS_LOG: /dev/stdout
@@ -90,16 +96,16 @@ services:
       AZURE_OPENAI_API_KEY: "${AZURE_OPENAI_API_KEY:-}"
       AZURE_OPENAI_ENDPOINT: "${AZURE_OPENAI_ENDPOINT:-}"
 
-      # AI Provider Routing
+      # AI Provider Routing (Encrypted TLS Transport)
       AI_PROVIDER: "${AI_PROVIDER:-openai}"
       AI_MODEL_NAME: "${AI_MODEL_NAME:-mock-compliance-llm}"
-      AI_UPSTREAM_URL: "${AI_UPSTREAM_URL:-http://pii-sanitizer:8088/mock-llm}"
+      AI_UPSTREAM_URL: "${AI_UPSTREAM_URL:-https://pii-sanitizer:8443/mock-llm}"
 
       PII_REDACT_TYPE: "${PII_REDACT_TYPE:-placeholder}"
       KONG_UNTRUSTED_LUA: "on"
 
     volumes:
-      - ./config/kong.yaml:/usr/local/kong/declarative/kong.yaml:ro
+      - ./config/kong.oss.yaml:/usr/local/kong/declarative/kong.oss.yaml:ro
       - ./plugins/bcb-pii-sanitizer/kong/plugins/bcb-pii-sanitizer:/usr/local/share/lua/5.1/kong/plugins/bcb-pii-sanitizer:ro
       - ./plugins/bcb-otel-scrubber/kong/plugins/bcb-otel-scrubber:/usr/local/share/lua/5.1/kong/plugins/bcb-otel-scrubber:ro
       - ./logs:/tmp/audit-logs
@@ -107,9 +113,79 @@ services:
     ports:
       - "8000:8000"
       - "8443:8443"
-      - "8001:8001"
-      - "8444:8444"
-      - "8002:8002"
+      # BCB CMN 4893/21: Admin API ports (8001, 8444, 8002) removed from host exposure.
+      # To access Admin API locally for administration, use docker exec or SSH port forward.
+
+    networks:
+      - kong-ai-net
+
+    depends_on:
+      pii-sanitizer:
+        condition: service_healthy
+
+    healthcheck:
+      test: ["CMD", "kong", "health"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+
+    restart: unless-stopped
+
+  # ── Kong Gateway Enterprise (Full AI FinOps Profile) ─────────────────────────
+  kong-gateway-enterprise:
+    profiles: ["enterprise"]
+    image: kong/kong-gateway:3.14
+    container_name: kong-gateway-enterprise
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /usr/local/kong/declarative/kong.enterprise.yaml
+      KONG_PLUGINS: "bundled,bcb-pii-sanitizer,bcb-otel-scrubber"
+      KONG_LUA_PACKAGE_PATH: "/usr/local/share/lua/5.1/?.lua;/usr/local/share/lua/5.1/?/init.lua;;"
+
+      KONG_LICENSE_DATA: "${KONG_LICENSE_DATA:-}"
+
+      KONG_PROXY_LISTEN: "0.0.0.0:8000, 0.0.0.0:8443 ssl"
+      # BCB CMN 4893/21 Hardening: Bind Admin plane to loopback only
+      KONG_ADMIN_LISTEN: "127.0.0.1:8001, 127.0.0.1:8444 ssl"
+      KONG_ADMIN_GUI_LISTEN: "127.0.0.1:8002"
+      KONG_ENFORCE_RBAC: "${KONG_ENFORCE_RBAC:-off}"
+      KONG_ADMIN_GUI_AUTH: "${KONG_ADMIN_GUI_AUTH:-basic-auth}"
+
+      KONG_LOG_LEVEL: info
+      KONG_PROXY_ACCESS_LOG: /dev/stdout
+      KONG_PROXY_ERROR_LOG: /dev/stderr
+      KONG_ADMIN_ACCESS_LOG: /dev/stdout
+      KONG_ADMIN_ERROR_LOG: /dev/stderr
+
+      # Cloud Provider Credentials
+      AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID:-}"
+      AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY:-}"
+      AWS_REGION: "${AWS_REGION:-us-east-1}"
+
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      AZURE_OPENAI_API_KEY: "${AZURE_OPENAI_API_KEY:-}"
+      AZURE_OPENAI_ENDPOINT: "${AZURE_OPENAI_ENDPOINT:-}"
+
+      # AI Provider Routing (Encrypted TLS Transport)
+      AI_PROVIDER: "${AI_PROVIDER:-openai}"
+      AI_MODEL_NAME: "${AI_MODEL_NAME:-mock-compliance-llm}"
+      AI_UPSTREAM_URL: "${AI_UPSTREAM_URL:-https://pii-sanitizer:8443/mock-llm}"
+
+      PII_REDACT_TYPE: "${PII_REDACT_TYPE:-placeholder}"
+      KONG_UNTRUSTED_LUA: "on"
+
+    volumes:
+      - ./config/kong.enterprise.yaml:/usr/local/kong/declarative/kong.enterprise.yaml:ro
+      - ./plugins/bcb-pii-sanitizer/kong/plugins/bcb-pii-sanitizer:/usr/local/share/lua/5.1/kong/plugins/bcb-pii-sanitizer:ro
+      - ./plugins/bcb-otel-scrubber/kong/plugins/bcb-otel-scrubber:/usr/local/share/lua/5.1/kong/plugins/bcb-otel-scrubber:ro
+      - ./logs:/tmp/audit-logs
+
+    ports:
+      - "8000:8000"
+      - "8443:8443"
+      # BCB CMN 4893/21: Admin API ports (8001, 8444, 8002) removed from host exposure.
+      # To access Admin API locally for administration, use docker exec or SSH port forward.
 
     networks:
       - kong-ai-net

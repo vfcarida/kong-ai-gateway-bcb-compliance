@@ -1,3 +1,15 @@
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  OpenTelemetry Collector — Privacy Telemetry Pipeline (Contrib)             ║
+# ║  Compliance Framework: BCB CMN 4893/21 & BCB 85/21                           ║
+# ║                                                                            ║
+# ║  Features:                                                                 ║
+# ║   • OTLP Receivers: gRPC (4317) & HTTP (4318)                              ║
+# ║   • Privacy Redaction: attributes/redact_genai processor redacts           ║
+# ║     gen_ai.prompt & gen_ai.completion from spans                           ║
+# ║   • Metric Preservation: gen_ai.usage.*, system, model, latencies intact   ║
+# ║   • Exporter: debug (detailed) replacing deprecated logging exporter       ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
 receivers:
   otlp:
     protocols:
@@ -11,17 +23,35 @@ processors:
     timeout: 1s
     send_batch_size: 1024
 
+  # ── BCB Privacy Redaction Processor ──────────────────────────────────────────
+  # Redacts raw prompt and completion payloads from spans before exporting to APM.
+  # Operates in tandem with Kong Gateway bcb-otel-scrubber (log serialization).
+  attributes/redact_genai:
+    actions:
+      - key: gen_ai.prompt
+        action: update
+        value: "[REDACTED_BY_BCB_COMPLIANCE_POLICY]"
+      - key: gen_ai.completion
+        action: update
+        value: "[REDACTED_BY_BCB_COMPLIANCE_POLICY]"
+      - key: ai.prompt
+        action: update
+        value: "[REDACTED_BY_BCB_COMPLIANCE_POLICY]"
+      - key: ai.completion
+        action: update
+        value: "[REDACTED_BY_BCB_COMPLIANCE_POLICY]"
+
 exporters:
-  logging:
-    loglevel: info
+  debug:
+    verbosity: detailed
 
 service:
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [batch]
-      exporters: [logging]
+      processors: [batch, attributes/redact_genai]
+      exporters: [debug]
     metrics:
       receivers: [otlp]
       processors: [batch]
-      exporters: [logging]
+      exporters: [debug]

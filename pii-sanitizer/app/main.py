@@ -212,11 +212,34 @@ async def root():
 
 if __name__ == "__main__":
     import uvicorn
+    from pathlib import Path
+
+    port = int(os.getenv("PORT", "8443"))
+    ssl_keyfile = os.getenv("SSL_KEYFILE")
+    ssl_certfile = os.getenv("SSL_CERTFILE")
+
+    # Fallback to local certs directory if present
+    if not ssl_keyfile or not ssl_certfile:
+        base_dir = Path(__file__).resolve().parent.parent
+        dev_key = base_dir / "certs" / "dev-key.pem"
+        dev_cert = base_dir / "certs" / "dev-cert.pem"
+        if dev_key.exists() and dev_cert.exists():
+            ssl_keyfile = str(dev_key)
+            ssl_certfile = str(dev_cert)
+
+    ssl_kwargs = {}
+    if ssl_keyfile and ssl_certfile and os.path.exists(ssl_keyfile) and os.path.exists(ssl_certfile):
+        ssl_kwargs["ssl_keyfile"] = ssl_keyfile
+        ssl_kwargs["ssl_certfile"] = ssl_certfile
+        logger.info("Starting PII Sanitizer over TLS on port %d", port)
+    else:
+        logger.warning("No TLS certificates found, falling back to plaintext on port %d", port)
 
     uvicorn.run(
         "app.main:app",
         host="0.0.0.0",
-        port=int(os.getenv("PORT", "8088")),
+        port=port,
         reload=False,
         log_level="info",
+        **ssl_kwargs,
     )

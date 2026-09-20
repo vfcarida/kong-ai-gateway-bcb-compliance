@@ -1,17 +1,20 @@
 # ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║  Kong AI Gateway — Declarative Configuration (decK v3.0)                    ║
+# ║  Kong AI Gateway — Open-Source (OSS) Declarative Configuration               ║
 # ║  Compliance Framework: BCB CMN 4893/21 & BCB 85/21                           ║
 # ║                                                                            ║
-# ║  Configured Plugins & Features:                                            ║
-# ║   1. bcb-pii-sanitizer: Pre-request PII detection & obfuscation            ║
+# ║  Zero-License Required: All plugins below run on Kong Community Edition (OSS)║
+# ║  Configured Plugins:                                                       ║
+# ║   1. bcb-pii-sanitizer: Pre-request PII detection & obfuscation (Custom)    ║
 # ║   2. bcb-otel-scrubber: GenAI privacy log serialization scrubber (Custom)   ║
 # ║   3. opentelemetry: Distributed tracing export to OTel Collector (OSS)      ║
-# ║   4. ai-prompt-guard: Semantic guardrails against prompt injection (LLM01) ║
-# ║   5. ai-semantic-cache: Redis Vector Search caching (FinOps optimization)  ║
-# ║   6. ai-rate-limiting-advanced: Token-based budgets (OWASP LLM10)          ║
-# ║   7. ai-proxy: Provider abstraction & SigV4 / bearer authentication        ║
-# ║   8. file-log: Regulatory audit log serialization                         ║
-# ║   9. correlation-id: Request tracking & structured audit logging           ║
+# ║   4. ai-prompt-guard: Semantic guardrails against prompt injection (LLM01)   ║
+# ║   5. ai-proxy: Multi-provider abstraction & failover routing (OSS)          ║
+# ║   6. file-log: Regulatory audit log serialization (BCB 85/21)                ║
+# ║   7. correlation-id: Request tracking & structured audit logging            ║
+# ║                                                                            ║
+# ║  Excluded (Enterprise Only):                                               ║
+# ║   • ai-semantic-cache (Requires Kong Gateway Enterprise + Redis Vector)      ║
+# ║   • ai-rate-limiting-advanced (Requires Kong Gateway Enterprise)             ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
 _format_version: "3.0"
@@ -80,35 +83,7 @@ services:
             - "(?i)reveal\\s+system\\s+prompt"
           match_all_roles: true
 
-      # ── 5. AI Semantic Cache (FinOps Vector Search Cache) ───────────────────
-      - name: ai-semantic-cache
-        config:
-          embeddings:
-            auth: {}
-            model:
-              name: "text-embedding-3-small"
-              provider: "openai"
-          vectordb:
-            strategy: "redis"
-            redis:
-              host: "redis-vector"
-              port: 6379
-              distance_threshold: 0.85
-
-      # ── 6. AI Token Rate Limiting (OWASP LLM10:2025 Unbounded Consumption) ──
-      - name: ai-rate-limiting-advanced
-        config:
-          llm_providers:
-            - provider: "openai"
-              limit: 50000 # 50k tokens per minute limit
-              window_size: 60
-              sync_rate: 10
-              cost_strategy: "tokens"
-          redis:
-            host: "redis-vector"
-            port: 6379
-
-      # ── 7. AI Proxy & Provider Failover Routing ─────────────────────────────
+      # ── 5. AI Proxy & Provider Routing (OSS Supported) ──────────────────────
       - name: ai-proxy
         config:
           route_type: "llm/v1/chat"
@@ -128,13 +103,13 @@ services:
             log_statistics: true
             log_payloads: false
 
-      # ── 8. Regulatory Audit Trail Logging (BCB 85/21) ──────────────────────
+      # ── 6. Regulatory Audit Trail Logging (BCB 85/21) ──────────────────────
       - name: file-log
         config:
           path: "/tmp/audit-logs/kong-audit.log"
           reopen: true
 
-      # ── 9. Request Traceability & Audit Correlation ───────────────────────────
+      # ── 7. Request Traceability & Audit Correlation ───────────────────────────
       - name: correlation-id
         config:
           header_name: "X-Request-ID"
