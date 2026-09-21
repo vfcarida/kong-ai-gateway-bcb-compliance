@@ -11,7 +11,7 @@ FROM python:3.12-slim
 
 LABEL maintainer="DevSecOps Team"
 LABEL description="PII Sanitizer Service — Kong AI Gateway Reference Architecture"
-LABEL version="1.0.0"
+LABEL version="2.0.0"
 
 # Segurança: não rodar como root
 RUN groupadd -r appuser && useradd -r -g appuser appuser

@@ -66,16 +66,18 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Start Docker Compose Environment
+      - name: Start Docker Compose Environment (OSS Profile)
         run: |
-          docker compose up -d --build
+          docker compose --profile oss up -d --build
           sleep 15
-          docker compose ps
+          docker compose --profile oss ps
 
       - name: Verify Service Health
         run: |
-          curl -f http://localhost:8088/health
-          curl -f http://localhost:8001/status
+          # Verify PII Sanitizer TLS endpoint (self-signed dev cert)
+          curl -k -f https://localhost:8088/health
+          # Verify Kong Gateway status via internal health probe (Admin API is hardened to loopback)
+          docker exec kong-gateway-oss kong health
 
       - name: Run Python E2E Verification Script
         run: |
@@ -90,4 +92,4 @@ jobs:
       - name: Teardown Docker Compose
         if: always()
         run: |
-          docker compose down -v
+          docker compose --profile oss down -v

@@ -49,6 +49,8 @@
 - [Testing & Quality Assurance Suite](#-testing--quality-assurance-suite)
 - [Audit & Regulatory Log Verification](#-audit--regulatory-log-verification)
 - [Architecture Decision Records (ADRs)](#-architecture-decision-records-adrs)
+- [Community & Governance](#-community--governance)
+- [Changelog](#-changelog)
 
 ---
 
@@ -322,22 +324,45 @@ curl -i -X POST http://localhost:8000/llm-proxy \
 
 ## 🧪 Testing & Quality Assurance Suite
 
-The repository contains three test suites:
+The repository contains four test suites covering **42+ automated tests**:
 
-### 1. Python Pytest Microservice Suite
+### 1. Python Pytest Microservice Suite (42 tests)
+Covers PII detection, CPF/CNPJ checksum validation, synthetic consistency, TLS hardening, and OTel redaction:
 ```bash
 pip install -r pii-sanitizer/requirements.txt pytest httpx
 pytest pii-sanitizer/tests/ -v
+# Or using Makefile (Linux/macOS/WSL):
+make test
 ```
 
-### 2. Python E2E Integration Verification
+### 2. Lua Busted Plugin Specs (Kong Pongo)
+Unit and integration tests for `bcb-pii-sanitizer` and `bcb-otel-scrubber` Kong plugins:
+```bash
+pongo run spec/
+# Or using Makefile:
+make test-lua
+```
+
+### 3. Python E2E Integration Verification
 ```bash
 python test_kong_proxy.py
+# Or using Makefile:
+make test-e2e
 ```
 
-### 3. k6 Performance & Latency Benchmark
+### 4. k6 Performance & Latency Benchmark
 ```bash
 k6 run tests/k6/llm_benchmark.js
+```
+
+### Developer Shortcuts (Makefile)
+```bash
+make help          # List all available commands
+make up-oss        # Start OSS Docker stack
+make up-enterprise # Start Enterprise Docker stack
+make lint          # Run flake8 static analysis
+make format        # Run black code formatter
+make clean         # Clean up caches and build artifacts
 ```
 
 ---
@@ -384,6 +409,22 @@ Kong Gateway serializes structured audit records to `/tmp/audit-logs/kong-audit.
 
 - [ADR 0001: Architecture Reference for Brazilian Central Bank (CMN 4.893/2021 & BCB 85/2021) Technical Controls](docs/adr/0001-bcb-compliance-architecture.md)
 - [ADR 0002: OpenTelemetry GenAI Privacy Scrubbing & Telemetry Preservation](docs/adr/0002-otel-genai-privacy-scrubbing.md)
+- [ADR 0003: Session-Consistent Deterministic Synthetic Entity Pseudonymization](docs/adr/0003-session-consistent-synthetic-pseudonymization.md)
+
+---
+
+## 🤝 Community & Governance
+
+- [Apache 2.0 License](LICENSE)
+- [Contributing Guidelines](CONTRIBUTING.md)
+- [Security Policy & Vulnerability Reporting](SECURITY.md)
+- [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.md)
+
+---
+
+## 📋 Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for a complete version history of all notable changes.
 
 ---
 <div align="center">

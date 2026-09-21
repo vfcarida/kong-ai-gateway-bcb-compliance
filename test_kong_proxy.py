@@ -12,6 +12,7 @@ Usage:
     python test_kong_proxy.py --synthetic       # Validate synthetic data generation
 """
 
+import os
 import argparse
 import json
 import sys

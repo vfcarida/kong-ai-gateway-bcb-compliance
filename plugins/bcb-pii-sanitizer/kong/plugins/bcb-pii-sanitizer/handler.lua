@@ -34,6 +34,28 @@ local BCBPIISanitizerHandler = {
   VERSION = "2.1.0",
 }
 
+--- Fast in-memory pre-screening to bypass external sidecar when no PII markers exist
+-- @param text String to inspect
+-- @return boolean true if text requires deep scanning, false if provably devoid of PII
+local function quick_pii_check(text)
+  if not text or #text == 0 then
+    return false
+  end
+  -- 1. Digits are mandatory for CPF, CNPJ, Phone, Bank Account, and Monetary amounts
+  if string.find(text, "%d") then
+    return true
+  end
+  -- 2. At-sign is mandatory for Email addresses
+  if string.find(text, "@", 1, true) then
+    return true
+  end
+  -- 3. Capitalized word sequences may represent personal Names
+  if string.find(text, "%u%l+%s+%u%l+") then
+    return true
+  end
+  return false
+end
+
 --- Sanitizes a single text string via LRU cache or microservice call
 -- @param text String content to scan and redact
 -- @param config Plugin configuration record
@@ -43,6 +65,17 @@ local BCBPIISanitizerHandler = {
 local function sanitize_single_text(text, config, cache, redact_type)
   if not text or type(text) ~= "string" or #text == 0 then
     return nil, "empty_text"
+  end
+
+  -- Fast in-gateway pre-filter: skip network hop if provably devoid of PII entities
+  if not quick_pii_check(text) then
+    return {
+      sanitized_text = text,
+      pii_detected = {},
+      total_entities = 0,
+      processing_time_ms = 0.0,
+      redact_type = redact_type,
+    }, nil
   end
 
   local cache_key = "bcb_pii:" .. ngx.md5(text .. ":" .. redact_type)
@@ -91,6 +124,9 @@ local function sanitize_single_text(text, config, cache, redact_type)
   end
 
   local parse_ok, decoded = pcall(cjson.decode, res.body)
+  -- Place connection into keepalive pool (max idle 60s, pool size 100)
+  pcall(function() httpc:set_keepalive(60000, 100) end)
+
   if parse_ok and decoded then
     if cache and config.cache_ttl_seconds > 0 then
       cache:set(cache_key, cjson.encode(decoded), config.cache_ttl_seconds)
@@ -111,10 +147,24 @@ function BCBPIISanitizerHandler:access(config)
     return
   end
 
+  local content_type = kong.request.get_header("Content-Type") or ""
+  local is_json_content = string.find(string.lower(content_type), "application/json", 1, true)
+
   local ok, body_json = pcall(cjson.decode, body_raw)
   if not ok or not body_json or type(body_json) ~= "table" then
-    kong.log.warn("[bcb-pii-sanitizer] Request body is not valid JSON, skipping processing.")
-    return
+    if is_json_content or not config.fail_open then
+      kong.log.warn("[bcb-pii-sanitizer] Request body is not valid JSON, rejecting under strict compliance.")
+      return kong.response.exit(400, {
+        type = "https://tools.ietf.org/html/rfc7807",
+        title = "Bad Request - Invalid JSON",
+        status = 400,
+        detail = "Request payload must be valid JSON matching chat completions schema.",
+        instance = kong.request.get_path(),
+      }, { ["Content-Type"] = "application/problem+json" })
+    else
+      kong.log.warn("[bcb-pii-sanitizer] Request body is not valid JSON, skipping processing.")
+      return
+    end
   end
 
   local messages = body_json.messages

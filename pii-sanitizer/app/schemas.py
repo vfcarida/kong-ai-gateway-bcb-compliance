@@ -22,6 +22,10 @@ class SanitizeRequest(BaseModel):
         default=RedactType.PLACEHOLDER,
         description="Type of redaction: 'placeholder' or 'synthetic'",
     )
+    session_id: Optional[str] = Field(
+        default=None,
+        description="Optional session or conversation ID for cross-request consistent pseudonymization",
+    )
 
 
 class PIIEntity(BaseModel):

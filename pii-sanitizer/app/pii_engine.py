@@ -8,7 +8,7 @@ Emails, Phones, Names, Money) and performs redaction or synthetic substitution.
 import re
 import random
 import time
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 from app.schemas import RedactType, PIIEntity, SanitizeResponse
 
 
@@ -168,15 +168,49 @@ NORMALIZED_STOPWORDS = {
 }
 
 
+def normalize_entity_key(pii_type: str, value: str) -> str:
+    """Normalizes an entity value to a canonical key for deterministic matching."""
+    if pii_type in ("CPF", "CNPJ"):
+        return f"{pii_type}:{re.sub(r'\D', '', value)}"
+    elif pii_type in ("EMAIL", "NAME"):
+        return f"{pii_type}:{value.strip().lower()}"
+    elif pii_type == "PHONE":
+        return f"{pii_type}:{re.sub(r'\D', '', value)}"
+    elif pii_type == "BANK_ACCOUNT":
+        norm = re.sub(r"[\s:.-]", "", value.lower())
+        return f"{pii_type}:{norm}"
+    elif pii_type == "MONEY":
+        norm = re.sub(r"[\s]", "", value.lower()).rstrip(".,")
+        return f"{pii_type}:{norm}"
+    return f"{pii_type}:{value.strip()}"
+
+
+def _format_synthetic(pii_type: str, raw_synthetic: str, original_value: str) -> str:
+    """Formats the generated synthetic value to match the formatting style of the original."""
+    if pii_type in ("CPF", "CNPJ"):
+        if re.match(r"^\d+$", original_value):
+            return re.sub(r"\D", "", raw_synthetic)
+    return raw_synthetic
+
+
 # ── Core Engine Function ──────────────────────────────────────────────────────
 
 
-def detect_and_sanitize(text: str, redact_type: RedactType) -> SanitizeResponse:
+def detect_and_sanitize(
+    text: str,
+    redact_type: RedactType,
+    entity_map: Optional[Dict[str, str]] = None,
+) -> SanitizeResponse:
     """Scans input text, detects Brazilian PII entities, and applies redactions."""
     start_time = time.perf_counter()
     entities: List[PIIEntity] = []
     counters: Dict[str, int] = {}
     raw_matches: List[Tuple[str, int, int, str, int, Optional[bool]]] = []
+
+    # Local synthetic map seeded by caller's entity_map if provided
+    synthetic_map: Dict[str, str] = {}
+    if entity_map is not None:
+        synthetic_map.update(entity_map)
 
     # 1. Regex scanning
     for pii_type, pattern, priority in PII_PATTERNS:
@@ -227,14 +261,23 @@ def detect_and_sanitize(text: str, redact_type: RedactType) -> SanitizeResponse:
             filtered_matches.append((pii_type, start, end, value, priority, checksum_valid))
             last_end = end
 
-    # 4. Replacement in reverse order
+    # 4. Pre-assign synthetic values in forward occurrence order
+    if redact_type == RedactType.SYNTHETIC:
+        for pii_type, start, end, value, _, _ in filtered_matches:
+            canon_key = normalize_entity_key(pii_type, value)
+            if canon_key not in synthetic_map:
+                synthetic_map[canon_key] = _get_synthetic(pii_type)
+
+    # 5. Replacement in reverse order
     sanitized = text
     for pii_type, start, end, value, _, checksum_valid in reversed(filtered_matches):
         counters[pii_type] = counters.get(pii_type, 0) + 1
         idx = counters[pii_type]
 
         if redact_type == RedactType.SYNTHETIC:
-            replacement = _get_synthetic(pii_type)
+            canon_key = normalize_entity_key(pii_type, value)
+            base_synthetic = synthetic_map[canon_key]
+            replacement = _format_synthetic(pii_type, base_synthetic, value)
         else:
             replacement = f"[REDACTED_{pii_type}_{idx}]"
 
@@ -251,6 +294,9 @@ def detect_and_sanitize(text: str, redact_type: RedactType) -> SanitizeResponse:
         sanitized = sanitized[:start] + replacement + sanitized[end:]
 
     entities.reverse()
+    if entity_map is not None:
+        entity_map.update(synthetic_map)
+
     elapsed_ms = (time.perf_counter() - start_time) * 1000
 
     return SanitizeResponse(
@@ -274,3 +320,4 @@ def _get_synthetic(pii_type: str) -> str:
     }
     gen = generators.get(pii_type)
     return gen() if gen else f"[SYNTHETIC_{pii_type}]"
+

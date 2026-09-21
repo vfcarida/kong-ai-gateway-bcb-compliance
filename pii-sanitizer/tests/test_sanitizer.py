@@ -63,6 +63,77 @@ def test_sanitize_synthetic():
     assert data["total_entities"] >= 1
 
 
+def test_synthetic_consistency_repeated_cpf_in_single_prompt():
+    """Verifies identical PII entities receive the identical synthetic value within the same prompt."""
+    payload = {
+        "text": (
+            "Primeira mencao: CPF 123.456.789-09 do cliente. "
+            "Segunda mencao: confirmar transferencia para o mesmo titular do CPF 123.456.789-09."
+        ),
+        "redact_type": "synthetic",
+    }
+    response = client.post("/sanitize", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total_entities"] == 2
+
+    # Both occurrences of the same CPF must be replaced with the exact same synthetic replacement
+    entity1 = data["pii_detected"][0]
+    entity2 = data["pii_detected"][1]
+    assert entity1["replacement"] == entity2["replacement"]
+    # The replacement must occur twice in the sanitized text
+    assert data["sanitized_text"].count(entity1["replacement"]) == 2
+
+
+def test_synthetic_consistency_format_awareness():
+    """Verifies that formatted and unformatted representations share the same synthetic identity."""
+    payload = {
+        "text": "Formatado: 123.456.789-09. Sem pontuacao: 12345678909.",
+        "redact_type": "synthetic",
+    }
+    response = client.post("/sanitize", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total_entities"] == 2
+
+    e_formatted = next(e for e in data["pii_detected"] if "." in e["original"])
+    e_raw = next(e for e in data["pii_detected"] if "." not in e["original"])
+
+    # Raw digits stripped from both replacements must be strictly identical
+    assert e_formatted["replacement"].replace(".", "").replace("-", "") == e_raw["replacement"]
+    assert "." in e_formatted["replacement"]
+    assert "." not in e_raw["replacement"]
+
+
+def test_synthetic_consistency_session_id():
+    """Verifies that passing session_id preserves synthetic identities across sequential API calls."""
+    client.post("/mock-llm/reset")
+
+    session_id = "sess-compliance-audit-42"
+    payload1 = {
+        "text": "Turno 1: O cliente cadastrado possui o CPF 123.456.789-09.",
+        "redact_type": "synthetic",
+        "session_id": session_id,
+    }
+    res1 = client.post("/sanitize", json=payload1)
+    assert res1.status_code == 200
+    data1 = res1.json()
+    synth_cpf_1 = data1["pii_detected"][0]["replacement"]
+
+    payload2 = {
+        "text": "Turno 2: Por favor detalhe as operacoes do CPF 123.456.789-09.",
+        "redact_type": "synthetic",
+        "session_id": session_id,
+    }
+    res2 = client.post("/sanitize", json=payload2)
+    assert res2.status_code == 200
+    data2 = res2.json()
+    synth_cpf_2 = data2["pii_detected"][0]["replacement"]
+
+    # Must preserve identity across sessions
+    assert synth_cpf_1 == synth_cpf_2
+
+
 def test_rfc7807_empty_text():
     payload = {"text": "   ", "redact_type": "placeholder"}
     response = client.post("/sanitize", json=payload)

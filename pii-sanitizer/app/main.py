@@ -49,6 +49,9 @@ last_llm_request: Dict[str, Any] = {
     "timestamp": None,
 }
 
+SESSION_SYNTHETIC_CACHE: Dict[str, Dict[str, str]] = {}
+MAX_SESSION_CACHE_SIZE = 1000
+
 
 # ── RFC 7807 Problem Details Error Handlers ────────────────────────────────────
 
@@ -116,7 +119,18 @@ async def sanitize_text(request_data: SanitizeRequest):
             headers={"Content-Type": "application/problem+json"},
         )
 
-    result = detect_and_sanitize(request_data.text, request_data.redact_type)
+    session_map: Optional[Dict[str, str]] = None
+    if request_data.session_id:
+        if len(SESSION_SYNTHETIC_CACHE) >= MAX_SESSION_CACHE_SIZE:
+            first_key = next(iter(SESSION_SYNTHETIC_CACHE))
+            del SESSION_SYNTHETIC_CACHE[first_key]
+        session_map = SESSION_SYNTHETIC_CACHE.setdefault(request_data.session_id, {})
+
+    result = detect_and_sanitize(
+        request_data.text,
+        request_data.redact_type,
+        entity_map=session_map,
+    )
 
     if result.total_entities > 0:
         logger.info(
@@ -185,10 +199,11 @@ async def get_last_llm_request():
 
 @app.post("/mock-llm/reset", tags=["Mock LLM"])
 async def reset_last_llm_request():
-    """Resets mock LLM state."""
+    """Resets mock LLM state and session pseudonymization cache."""
     last_llm_request["payload"] = None
     last_llm_request["timestamp"] = None
-    logger.info("Mock LLM state reset.")
+    SESSION_SYNTHETIC_CACHE.clear()
+    logger.info("Mock LLM state and session cache reset.")
     return {"status": "reset"}
 
 
