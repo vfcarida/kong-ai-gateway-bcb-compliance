@@ -8,6 +8,7 @@ Emails, Phones, Names, Money) and performs redaction or synthetic substitution.
 import re
 import random
 import time
+import uuid
 from typing import List, Dict, Tuple, Optional
 from app.schemas import RedactType, PIIEntity, SanitizeResponse
 
@@ -153,6 +154,19 @@ def generate_synthetic_credit_card(brand_prefix: str = "4") -> str:
     return f"{s[:4]} {s[4:8]} {s[8:12]} {s[12:]}"
 
 
+def generate_synthetic_pix_key() -> str:
+    """Generates a synthetic BCB PIX Random Key (EVP - Endereço Virtual Pagador / UUID v4)."""
+    return str(uuid.uuid4())
+
+
+def generate_synthetic_rg() -> str:
+    """Generates a synthetic Brazilian RG (Registro Geral) formatted as XX.XXX.XXX-X."""
+    digits = [random.randint(0, 9) for _ in range(8)]
+    dig = random.choice([str(random.randint(0, 9)), "X"])
+    s = "".join(str(d) for d in digits)
+    return f"{s[:2]}.{s[2:5]}.{s[5:8]}-{dig}"
+
+
 # ── Compiled Patterns and Priorities ──────────────────────────────────────────
 
 PII_PATTERNS: List[Tuple[str, re.Pattern, int]] = [
@@ -170,6 +184,16 @@ PII_PATTERNS: List[Tuple[str, re.Pattern, int]] = [
     ("CREDIT_CARD", re.compile(r"\b3[47]\d{2}[-\s.]\d{6}[-\s.]\d{5}\b"), 0),
     # Raw Credit Card: 15 or 16 exact digits (Luhn gated)
     ("CREDIT_CARD", re.compile(r"\b\d{15,16}\b"), 1),
+    # PIX Key (EVP / Chave Aleatória - RFC 4122 UUID v4 with PIX context keywords under BCB Resolução 1/2020)
+    (
+        "PIX_KEY",
+        re.compile(
+            r"(?i)\b(?:chave(?:\s+pix|\s+aleat[oó]ria)?|pix|evp)\b(?:\s+(?:aleat[oó]ria|pix))?(?:\s+(?:[eé]|para|de|do))?[\s:=]+([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})\b"
+        ),
+        0,
+    ),
+    # Formatted Brazilian RG (Registro Geral): e.g. 12.345.678-9 or 12.345.678-X or 1.234.567-8
+    ("RG", re.compile(r"\b\d{1,2}\.\d{3}\.\d{3}-[\dXx]\b"), 0),
     # Email
     ("EMAIL", re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"), 0),
     # Phone numbers: captures Brazilian mobile/landline formats while excluding arbitrary digit sequences
@@ -219,7 +243,9 @@ def normalize_entity_key(pii_type: str, value: str) -> str:
     """Normalizes an entity value to a canonical key for deterministic matching."""
     if pii_type in ("CPF", "CNPJ", "CREDIT_CARD"):
         return f"{pii_type}:{re.sub(r'\D', '', value)}"
-    elif pii_type in ("EMAIL", "NAME"):
+    elif pii_type == "RG":
+        return f"{pii_type}:{re.sub(r'[^0-9a-zA-Z]', '', value).upper()}"
+    elif pii_type in ("EMAIL", "NAME", "PIX_KEY"):
         return f"{pii_type}:{value.strip().lower()}"
     elif pii_type == "PHONE":
         return f"{pii_type}:{re.sub(r'\D', '', value)}"
@@ -237,6 +263,10 @@ def _format_synthetic(pii_type: str, raw_synthetic: str, original_value: str) ->
     if pii_type in ("CPF", "CNPJ", "CREDIT_CARD"):
         if re.match(r"^\d+$", original_value):
             return re.sub(r"\D", "", raw_synthetic)
+    elif pii_type == "PIX_KEY":
+        if original_value.isupper():
+            return raw_synthetic.upper()
+        return raw_synthetic.lower()
     return raw_synthetic
 
 
@@ -262,7 +292,14 @@ def detect_and_sanitize(
     # 1. Regex scanning
     for pii_type, pattern, priority in PII_PATTERNS:
         for match in pattern.finditer(text):
-            value = match.group()
+            if match.lastindex and match.lastindex >= 1:
+                value = match.group(match.lastindex)
+                m_start = match.start(match.lastindex)
+                m_end = match.end(match.lastindex)
+            else:
+                value = match.group()
+                m_start = match.start()
+                m_end = match.end()
             checksum_valid: Optional[bool] = None
 
             if pii_type == "CPF":
@@ -298,7 +335,7 @@ def detect_and_sanitize(
                 else:
                     checksum_valid = is_valid
 
-            raw_matches.append((pii_type, match.start(), match.end(), value, priority, checksum_valid))
+            raw_matches.append((pii_type, m_start, m_end, value, priority, checksum_valid))
 
     # 2. Name heuristic scanning
     for match in NAME_PATTERN.finditer(text):
@@ -385,6 +422,8 @@ def _get_synthetic(pii_type: str) -> str:
         "NAME": generate_synthetic_name,
         "MONEY": generate_synthetic_money,
         "BANK_ACCOUNT": generate_synthetic_bank_account,
+        "PIX_KEY": generate_synthetic_pix_key,
+        "RG": generate_synthetic_rg,
     }
     gen = generators.get(pii_type)
     return gen() if gen else f"[SYNTHETIC_{pii_type}]"

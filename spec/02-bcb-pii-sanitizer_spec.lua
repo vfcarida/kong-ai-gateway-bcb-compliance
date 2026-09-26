@@ -128,6 +128,8 @@ describe("Plugin: bcb-pii-sanitizer", function()
       })
 
       assert.res_status(200, res)
+      assert.equal("true", res.headers["x-bcb-compliance-verified"])
+      assert.equal("1", res.headers["x-bcb-pii-entities-redacted"])
 
       -- Verify upstream received sanitized content via probe
       local probe_res = client:get("/mock-probe")
@@ -140,6 +142,22 @@ describe("Plugin: bcb-pii-sanitizer", function()
           assert.is_not_nil(string.find(content, "REDACTED_CPF", 1, true), "Expected REDACTED_CPF replacement")
         end
       end
+    end)
+
+    it("forwards session_id and compliance headers upstream and downstream", function()
+      local res = client:post("/test-pii", {
+        headers = {
+          ["Content-Type"] = "application/json",
+          ["X-Session-ID"] = "session-test-compliance-42",
+        },
+        body = [[{
+          "messages": [{"role": "user", "content": "Cliente CPF 123.456.789-09 cadastrado"}]
+        }]],
+      })
+
+      assert.res_status(200, res)
+      assert.equal("true", res.headers["x-bcb-compliance-verified"])
+      assert.equal("1", res.headers["x-bcb-pii-entities-redacted"])
     end)
 
     it("returns 502 Bad Gateway and blocks forwarding when sanitizer is unreachable under fail-closed", function()

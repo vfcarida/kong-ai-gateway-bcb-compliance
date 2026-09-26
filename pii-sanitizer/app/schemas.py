@@ -30,7 +30,7 @@ class SanitizeRequest(BaseModel):
 
 class PIIEntity(BaseModel):
     """Details of a single detected PII entity."""
-    type: str = Field(..., description="Category of PII (CPF, CNPJ, CREDIT_CARD, BANK_ACCOUNT, EMAIL, PHONE, NAME, MONEY)")
+    type: str = Field(..., description="Category of PII (CPF, CNPJ, CREDIT_CARD, BANK_ACCOUNT, EMAIL, PHONE, NAME, MONEY, PIX_KEY, RG)")
     original: str = Field(..., description="Matched original sensitive string")
     replacement: str = Field(..., description="Obfuscated replacement string applied")
     start: int = Field(..., description="Start character offset")
@@ -51,6 +51,42 @@ class SanitizeResponse(BaseModel):
     processing_time_ms: float = Field(
         0.0, description="Processing latency in milliseconds"
     )
+    redact_type: str = Field("placeholder", description="Applied redaction mode")
+
+
+class SanitizeBatchItem(BaseModel):
+    """Individual item inside a batch sanitization request."""
+    id: Optional[str] = Field(None, description="Optional caller correlation ID for this batch item")
+    text: str = Field(..., description="Raw text prompt to analyze and sanitize")
+
+
+class SanitizeBatchRequest(BaseModel):
+    """Payload sent to the batch PII sanitization endpoint for RAG/vector ingestion."""
+    items: List[SanitizeBatchItem] = Field(..., description="List of text items to sanitize")
+    redact_type: RedactType = Field(
+        default=RedactType.PLACEHOLDER,
+        description="Type of redaction: 'placeholder' or 'synthetic'",
+    )
+    session_id: Optional[str] = Field(
+        default=None,
+        description="Optional session ID for shared cross-item pseudonym consistency",
+    )
+
+
+class SanitizeBatchItemResult(BaseModel):
+    """Result for an individual batch item."""
+    id: Optional[str] = Field(None, description="Caller correlation ID from request")
+    sanitized_text: str = Field(..., description="Sanitized text")
+    pii_detected: List[PIIEntity] = Field(default_factory=list, description="List of detected PII entities")
+    total_entities: int = Field(0, description="Total entity count detected")
+
+
+class SanitizeBatchResponse(BaseModel):
+    """Result of batch sanitization processing."""
+    items: List[SanitizeBatchItemResult] = Field(..., description="Sanitized batch items")
+    total_items: int = Field(..., description="Number of items processed")
+    total_entities: int = Field(0, description="Total PII entities detected across all items")
+    processing_time_ms: float = Field(0.0, description="Total batch processing latency in milliseconds")
     redact_type: str = Field("placeholder", description="Applied redaction mode")
 
 

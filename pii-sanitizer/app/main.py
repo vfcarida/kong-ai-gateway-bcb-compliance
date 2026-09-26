@@ -18,6 +18,9 @@ from fastapi.exceptions import RequestValidationError
 from app.schemas import (
     SanitizeRequest,
     SanitizeResponse,
+    SanitizeBatchRequest,
+    SanitizeBatchResponse,
+    SanitizeBatchItemResult,
     ReidentifyRequest,
     ReidentifyResponse,
     HealthResponse,
@@ -35,7 +38,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger("pii-sanitizer")
 
-# ── App Initialization ────────────────────────────────────────────────────────
+# ── App Initialization & Configuration ────────────────────────────────────────
+
+MAX_PII_TEXT_LENGTH = int(os.getenv("MAX_PII_TEXT_LENGTH", "1000000"))  # 1MB character limit
+MAX_BATCH_ITEMS = int(os.getenv("MAX_BATCH_ITEMS", "100"))  # 100 items per batch
 
 app = FastAPI(
     title="PII Sanitizer & LLM Mock — BCB Compliance Engine",
@@ -141,6 +147,21 @@ async def sanitize_text(request_data: SanitizeRequest):
             headers={"Content-Type": "application/problem+json"},
         )
 
+    if len(request_data.text) > MAX_PII_TEXT_LENGTH:
+        GLOBAL_METRICS.record_request("/sanitize", 413, 0.0)
+        problem = ProblemDetails(
+            type="https://tools.ietf.org/html/rfc7807#section-3.1",
+            title="Payload Too Large",
+            status=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail=f"The input 'text' exceeds the maximum allowed length of {MAX_PII_TEXT_LENGTH} characters.",
+            instance="/sanitize",
+        )
+        return JSONResponse(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            content=problem.model_dump(exclude_none=True),
+            headers={"Content-Type": "application/problem+json"},
+        )
+
     session_map: Optional[Dict[str, str]] = None
     if request_data.session_id:
         session_vault = GLOBAL_TOKEN_VAULT.get_or_create_session(request_data.session_id)
@@ -178,6 +199,126 @@ async def sanitize_text(request_data: SanitizeRequest):
         )
 
     return result
+
+
+@app.post("/sanitize-batch", response_model=SanitizeBatchResponse, tags=["PII Engine"])
+async def sanitize_batch(request_data: SanitizeBatchRequest):
+    """
+    Performs batch text analysis and sanitization across multiple documents or RAG chunks.
+    Maintains cross-chunk pseudonym consistency within the batch or session.
+    """
+    batch_start = time.perf_counter()
+    if not request_data.items:
+        GLOBAL_METRICS.record_request("/sanitize-batch", 400, 0.0)
+        problem = ProblemDetails(
+            type="https://tools.ietf.org/html/rfc7807#section-3.1",
+            title="Bad Request",
+            status=status.HTTP_400_BAD_REQUEST,
+            detail="The 'items' list cannot be empty.",
+            instance="/sanitize-batch",
+        )
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content=problem.model_dump(exclude_none=True),
+            headers={"Content-Type": "application/problem+json"},
+        )
+
+    if len(request_data.items) > MAX_BATCH_ITEMS:
+        GLOBAL_METRICS.record_request("/sanitize-batch", 413, 0.0)
+        problem = ProblemDetails(
+            type="https://tools.ietf.org/html/rfc7807#section-3.1",
+            title="Payload Too Large",
+            status=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail=f"Batch size exceeds maximum limit of {MAX_BATCH_ITEMS} items.",
+            instance="/sanitize-batch",
+        )
+        return JSONResponse(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            content=problem.model_dump(exclude_none=True),
+            headers={"Content-Type": "application/problem+json"},
+        )
+
+    shared_map: Dict[str, str] = {}
+    if request_data.session_id:
+        session_vault = GLOBAL_TOKEN_VAULT.get_or_create_session(request_data.session_id)
+        shared_map = session_vault.forward_map
+
+    item_results: List[SanitizeBatchItemResult] = []
+    total_batch_entities = 0
+    aggregate_entity_counts: Dict[str, int] = {}
+
+    for idx, item in enumerate(request_data.items):
+        if not item.text or not item.text.strip():
+            GLOBAL_METRICS.record_request("/sanitize-batch", 400, 0.0)
+            problem = ProblemDetails(
+                type="https://tools.ietf.org/html/rfc7807#section-3.1",
+                title="Bad Request",
+                status=status.HTTP_400_BAD_REQUEST,
+                detail=f"Item at index {idx} contains empty text.",
+                instance="/sanitize-batch",
+            )
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content=problem.model_dump(exclude_none=True),
+                headers={"Content-Type": "application/problem+json"},
+            )
+
+        if len(item.text) > MAX_PII_TEXT_LENGTH:
+            GLOBAL_METRICS.record_request("/sanitize-batch", 413, 0.0)
+            problem = ProblemDetails(
+                type="https://tools.ietf.org/html/rfc7807#section-3.1",
+                title="Payload Too Large",
+                status=status.HTTP_413_CONTENT_TOO_LARGE,
+                detail=f"Item at index {idx} exceeds maximum allowed length of {MAX_PII_TEXT_LENGTH} characters.",
+                instance="/sanitize-batch",
+            )
+            return JSONResponse(
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                content=problem.model_dump(exclude_none=True),
+                headers={"Content-Type": "application/problem+json"},
+            )
+
+        res = detect_and_sanitize(
+            item.text,
+            request_data.redact_type,
+            entity_map=shared_map,
+        )
+
+        if request_data.session_id:
+            for entity in res.pii_detected:
+                canon_key = normalize_entity_key(entity.type, entity.original)
+                GLOBAL_TOKEN_VAULT.record_entity(
+                    request_data.session_id,
+                    canon_key,
+                    entity.original,
+                    entity.replacement,
+                )
+
+        for entity in res.pii_detected:
+            aggregate_entity_counts[entity.type] = aggregate_entity_counts.get(entity.type, 0) + 1
+
+        total_batch_entities += res.total_entities
+        item_results.append(
+            SanitizeBatchItemResult(
+                id=item.id,
+                sanitized_text=res.sanitized_text,
+                pii_detected=res.pii_detected,
+                total_entities=res.total_entities,
+            )
+        )
+
+    elapsed_ms = (time.perf_counter() - batch_start) * 1000
+    GLOBAL_METRICS.record_request("/sanitize-batch", 200, elapsed_ms / 1000.0)
+    if aggregate_entity_counts:
+        GLOBAL_METRICS.record_entities(aggregate_entity_counts)
+
+    return SanitizeBatchResponse(
+        items=item_results,
+        total_items=len(item_results),
+        total_entities=total_batch_entities,
+        processing_time_ms=round(elapsed_ms, 2),
+        redact_type=request_data.redact_type.value,
+    )
 
 
 @app.post("/re-identify", response_model=ReidentifyResponse, tags=["Token Vault"])

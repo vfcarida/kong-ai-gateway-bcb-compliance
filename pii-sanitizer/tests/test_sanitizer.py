@@ -109,6 +109,55 @@ def test_sanitize_credit_card_synthetic():
     assert validate_luhn_checksum(digits) is True
 
 
+def test_sanitize_pix_key_placeholder():
+    payload = {
+        "text": "Minha chave pix aleatoria e 123e4567-e89b-12d3-a456-426614174000 para receber",
+        "redact_type": "placeholder",
+    }
+    response = client.post("/sanitize", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+    assert "[REDACTED_PIX_KEY_1]" in data["sanitized_text"]
+    assert any(e["type"] == "PIX_KEY" for e in data["pii_detected"])
+
+
+def test_sanitize_pix_key_synthetic():
+    evp = "a1b2c3d4-e5f6-4a5b-8c9d-0e1f2a3b4c5d"
+    payload = {
+        "text": f"Pagar para chave pix {evp} agora",
+        "redact_type": "synthetic",
+    }
+    response = client.post("/sanitize", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+    pix_entity = next(e for e in data["pii_detected"] if e["type"] == "PIX_KEY")
+    assert pix_entity["original"] == evp
+    assert pix_entity["replacement"] != evp
+    import re
+    assert re.match(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", pix_entity["replacement"])
+
+
+def test_sanitize_rg_placeholder_and_synthetic():
+    payload_ph = {
+        "text": "Titular documento RG 12.345.678-9 SSP/SP autenticado",
+        "redact_type": "placeholder",
+    }
+    res_ph = client.post("/sanitize", json=payload_ph)
+    assert res_ph.status_code == 200
+    assert "[REDACTED_RG_1]" in res_ph.json()["sanitized_text"]
+
+    payload_synth = {
+        "text": "Documento RG 12.345.678-X apresentado no balcao",
+        "redact_type": "synthetic",
+    }
+    res_synth = client.post("/sanitize", json=payload_synth)
+    assert res_synth.status_code == 200
+    data_synth = res_synth.json()
+    rg_entity = next(e for e in data_synth["pii_detected"] if e["type"] == "RG")
+    import re
+    assert re.match(r"^\d{2}\.\d{3}\.\d{3}-[\dXx]$", rg_entity["replacement"])
+
+
 def test_synthetic_consistency_repeated_cpf_in_single_prompt():
     """Verifies identical PII entities receive the identical synthetic value within the same prompt."""
     payload = {
@@ -266,6 +315,9 @@ LABELLED_DETECTION_CASES = [
     ("formatted_credit_card_valid", "Cartao final 5555-5555-5555-4444 ativo", "CREDIT_CARD", True, True),
     ("raw_credit_card_valid", "Transacao no cartao 5555555555554444 aprovada", "CREDIT_CARD", True, True),
     ("raw_16_digits_invalid_card", "Codigo de rastreamento 1234567890123456 do pedido", "CREDIT_CARD", None, False),
+    ("pix_key_evp_uuid", "Chave aleatoria pix: a1b2c3d4-e5f6-4a5b-8c9d-0e1f2a3b4c5d para transferencia", "PIX_KEY", None, True),
+    ("formatted_rg_standard", "Documento de identidade RG 12.345.678-9 emitido pela SSP", "RG", None, True),
+    ("formatted_rg_digit_x", "Identidade RG 12.345.678-X apresentada", "RG", None, True),
 ]
 
 

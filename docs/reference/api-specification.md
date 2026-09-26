@@ -18,6 +18,7 @@ This specification defines the HTTP REST interface exposed by the **PII Sanitize
 | `GET` | `/health` | Container readiness and operational health probe. | Yes |
 | `GET` | `/metrics` | Prometheus text-format operational and DLP telemetry metrics. | Yes |
 | `POST` | `/sanitize` | Real-time Brazilian PII detection and redaction engine. | Yes |
+| `POST` | `/sanitize-batch` | High-throughput batch sanitization for RAG & vector ingestion. | Yes |
 | `POST` | `/re-identify` | Restores original PII entities from replacement tokens via session vault. | Yes |
 | `GET` | `/` | Service metadata and version discovery. | Yes |
 | `POST` | `/mock-llm/v1/chat/completions` | OpenAI-compatible mock LLM chat completion endpoint. | Dev Only (`ENABLE_MOCK_LLM=true`) |
@@ -70,7 +71,7 @@ pii_vault_active_sessions 3
 ## 3. `POST /sanitize`
 
 ### Description
-Scans input text, detects Brazilian financial and personal PII data (CPF, CNPJ, Payment Cards/PAN, Bank Accounts, Phone Numbers, Emails, Full Names, Money), and applies placeholder redaction or deterministic synthetic substitution. All CPF, CNPJ, and Payment Cards are mathematically verified using Modulo-11 and ISO/IEC 7812 Luhn checksums.
+Scans input text, detects Brazilian financial and personal PII data (CPF, CNPJ, Payment Cards/PAN, BCB PIX Random Keys/EVP under Res. 1/2020, Brazilian RG, Bank Accounts, Phone Numbers, Emails, Full Names, Money), and applies placeholder redaction or deterministic synthetic substitution. All CPF, CNPJ, and Payment Cards are mathematically verified using Modulo-11 and ISO/IEC 7812 Luhn checksums.
 
 ### Request Body (`SanitizeRequest`)
 ```json
@@ -82,59 +83,65 @@ Scans input text, detects Brazilian financial and personal PII data (CPF, CNPJ, 
 ```
 
 #### Fields:
-- `text` (*string, required*): The raw prompt or message content to inspect. Cannot be empty or whitespace-only.
+- `text` (*string, required*): The raw prompt or message content to inspect. Max 1,000,000 characters.
 - `redact_type` (*string, optional, default: `"placeholder"`*):
-  - `"placeholder"`: Replaces entities with indexed tags (e.g., `[REDACTED_CPF_1]`, `[REDACTED_MONEY_1]`).
+  - `"placeholder"`: Replaces entities with indexed tags (e.g., `[REDACTED_CPF_1]`, `[REDACTED_PIX_KEY_1]`).
   - `"synthetic"`: Replaces entities with mathematically valid, context-preserving synthetic fake values.
 - `session_id` (*string, optional*): When provided with `redact_type="synthetic"`, ensures that identical entities across sequential API calls receive the exact same synthetic replacement value.
 
-### Response (200 OK - `SanitizeResponse`)
+---
+
+## 4. `POST /sanitize-batch`
+
+### Description
+High-throughput batch sanitization API designed for enterprise RAG (Retrieval Augmented Generation) chunk ingestion and bulk document pre-filtering. Maintains deterministic synthetic pseudonym consistency across all items in the batch or within the referenced session vault.
+
+### Request Body (`SanitizeBatchRequest`)
 ```json
 {
-  "sanitized_text": "Transferir [REDACTED_MONEY_1] para o CPF [REDACTED_CPF_1] do cliente [REDACTED_NAME_1], conta [REDACTED_BANK_ACCOUNT_1].",
-  "pii_detected": [
+  "items": [
+    { "id": "chunk-01", "text": "Cliente João Silva com CPF 123.456.789-09 e PIX evp: a1b2c3d4-e5f6-4a5b-8c9d-0e1f2a3b4c5d" },
+    { "id": "chunk-02", "text": "Segunda menção ao titular CPF 123.456.789-09 para confirmação de conta." }
+  ],
+  "redact_type": "synthetic",
+  "session_id": "rag-ingestion-batch-101"
+}
+```
+
+#### Fields:
+- `items` (*array of objects, required*): List of text chunks to sanitize (max 100 items per batch).
+  - `id` (*string, optional*): Client correlation ID for tracking chunks.
+  - `text` (*string, required*): Text content to inspect and sanitize (max 1,000,000 characters per item).
+- `redact_type` (*string, optional, default: `"placeholder"`*): `"placeholder"` or `"synthetic"`.
+- `session_id` (*string, optional*): Session vault identifier for multi-chunk synthetic consistency and egress re-identification.
+
+### Response (200 OK - `SanitizeBatchResponse`)
+```json
+{
+  "items": [
     {
-      "type": "MONEY",
-      "original": "R$ 2.500,00",
-      "replacement": "[REDACTED_MONEY_1]",
-      "start": 11,
-      "end": 22,
-      "checksum_valid": null
+      "id": "chunk-01",
+      "sanitized_text": "Cliente Mariana Santos com CPF 492.381.047-52 e PIX evp: 987fcba9-1234-4567-89ab-cdef01234567",
+      "pii_detected": [ ... ],
+      "total_entities": 3
     },
     {
-      "type": "CPF",
-      "original": "123.456.789-09",
-      "replacement": "[REDACTED_CPF_1]",
-      "start": 34,
-      "end": 48,
-      "checksum_valid": true
-    },
-    {
-      "type": "NAME",
-      "original": "Carlos Silva",
-      "replacement": "[REDACTED_NAME_1]",
-      "start": 60,
-      "end": 72,
-      "checksum_valid": null
-    },
-    {
-      "type": "BANK_ACCOUNT",
-      "original": "conta 56789-0 agência 1234",
-      "replacement": "[REDACTED_BANK_ACCOUNT_1]",
-      "start": 74,
-      "end": 101,
-      "checksum_valid": null
+      "id": "chunk-02",
+      "sanitized_text": "Segunda menção ao titular CPF 492.381.047-52 para confirmação de conta.",
+      "pii_detected": [ ... ],
+      "total_entities": 1
     }
   ],
+  "total_items": 2,
   "total_entities": 4,
-  "processing_time_ms": 1.45,
-  "redact_type": "placeholder"
+  "processing_time_ms": 2.15,
+  "redact_type": "synthetic"
 }
 ```
 
 ---
 
-## 3. `POST /re-identify`
+## 5. `POST /re-identify`
 
 ### Description
 Restores authentic sensitive PII entities from replacement placeholder tokens (e.g. `[REDACTED_CPF_1]`) or synthetic fake values using the session's tokenization vault. Enables authorized egress re-identification for internal banking workflows. Aliased to `POST /de-anonymize`.
@@ -189,9 +196,35 @@ When an error occurs, the API returns `application/problem+json`:
 }
 ```
 
+### Example: 413 Payload Too Large (DoS / ReDoS Guard)
+```json
+{
+  "type": "https://tools.ietf.org/html/rfc7807#section-3.1",
+  "title": "Payload Too Large",
+  "status": 413,
+  "detail": "The input 'text' exceeds the maximum allowed length of 1000000 characters.",
+  "instance": "/sanitize"
+}
+```
+
 ---
 
-## 4. `POST /mock-llm/v1/chat/completions`
+## 7. Compliance HTTP Correlation Headers
+
+When requests transit through Kong Gateway configured with `bcb-pii-sanitizer`:
+
+| Header | Direction | Description | Example |
+|---|---|---|---|
+| `X-Session-ID` / `x-session-id` | Ingress (Client -> Kong) | Client-provided session identifier for persistent pseudonymization and Reversible Token Vault. | `session-usr-4421` |
+| `X-BCB-PII-Sanitized` | Upstream (Kong -> LLM) | Injected by Kong indicating request was inspected and scrubbed. | `true` |
+| `X-BCB-PII-Entities-Count` | Upstream (Kong -> LLM) | Total count of PII entities redacted in the prompt. | `3` |
+| `X-BCB-Session-ID` | Upstream (Kong -> LLM) | Propagated session identifier for upstream telemetry and correlation. | `session-usr-4421` |
+| `X-BCB-Compliance-Verified` | Egress (Kong -> Client) | Confirmation that the prompt satisfied Resolução CMN 4893/21 & BCB 85/21. | `true` |
+| `X-BCB-PII-Entities-Redacted` | Egress (Kong -> Client) | Number of sensitive entities masked before upstream LLM ingestion. | `3` |
+
+---
+
+## 8. `POST /mock-llm/v1/chat/completions`
 
 ### Description
 Mock OpenAI-compatible chat completion upstream. Calculates prompt and completion token counts to test OWASP LLM10:2025 rate-limiting controls. Guarded by `ENABLE_MOCK_LLM`.

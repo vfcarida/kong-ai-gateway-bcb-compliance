@@ -61,8 +61,9 @@ end
 -- @param config Plugin configuration record
 -- @param cache ngx.shared cache dictionary or nil
 -- @param redact_type Redaction mode ("placeholder" or "synthetic")
+-- @param session_id Optional session identifier string or nil
 -- @return sanitize_result table if successful, or nil and error code
-local function sanitize_single_text(text, config, cache, redact_type)
+local function sanitize_single_text(text, config, cache, redact_type, session_id)
   if not text or type(text) ~= "string" or #text == 0 then
     return nil, "empty_text"
   end
@@ -78,7 +79,7 @@ local function sanitize_single_text(text, config, cache, redact_type)
     }, nil
   end
 
-  local cache_key = "bcb_pii:" .. ngx.md5(text .. ":" .. redact_type)
+  local cache_key = "bcb_pii:" .. ngx.md5(text .. ":" .. redact_type .. ":" .. (session_id or ""))
   local cached_res = nil
 
   if cache then
@@ -96,10 +97,15 @@ local function sanitize_single_text(text, config, cache, redact_type)
   local httpc = http.new()
   httpc:set_timeout(config.timeout_ms or 5000)
 
-  local req_payload = cjson.encode({
+  local req_payload_table = {
     text = text,
     redact_type = redact_type,
-  })
+  }
+  if session_id and #session_id > 0 then
+    req_payload_table.session_id = session_id
+  end
+
+  local req_payload = cjson.encode(req_payload_table)
 
   local res, req_err = httpc:request_uri(config.sanitizer_url, {
     method = "POST",
@@ -179,13 +185,19 @@ function BCBPIISanitizerHandler:access(config)
   local pii_types = {}
   local modified = false
 
+  -- Extract session_id for session-consistent pseudonymization & Reversible Vault
+  local session_id = kong.request.get_header("X-Session-ID")
+    or kong.request.get_header("x-session-id")
+    or (type(body_json.user) == "string" and body_json.user ~= "" and body_json.user)
+    or nil
+
   -- Helper to sanitize a text string and apply mutation
   local function process_text_item(text, update_callback)
     if not text or type(text) ~= "string" or #text == 0 then
       return true
     end
 
-    local sanitize_result, err = sanitize_single_text(text, config, cache, redact_type)
+    local sanitize_result, err = sanitize_single_text(text, config, cache, redact_type, session_id)
     if err == "fail_closed" then
       return false, kong.response.exit(502, {
         type = "https://tools.ietf.org/html/rfc7807",
@@ -262,10 +274,17 @@ function BCBPIISanitizerHandler:access(config)
 
   -- Record compliance audit metrics into Kong shared context and log serialization
   if total_pii_count > 0 then
+    kong.service.request.set_header("X-BCB-PII-Sanitized", "true")
+    kong.service.request.set_header("X-BCB-PII-Entities-Count", tostring(total_pii_count))
+    if session_id then
+      kong.service.request.set_header("X-BCB-Session-ID", session_id)
+    end
+
     kong.ctx.shared.pii_sanitizer = {
       pii_identified = total_pii_count,
       pii_types = pii_types,
       redact_type = redact_type,
+      session_id = session_id,
       timestamp = ngx.now(),
     }
 
@@ -277,6 +296,16 @@ function BCBPIISanitizerHandler:access(config)
       table.insert(pii_type_list, k)
     end
     kong.log.set_serialize_value("ai.sanitizer.pii_types", pii_type_list)
+  end
+end
+
+--- Injects audit and compliance verification headers into downstream response
+-- @param config Plugin configuration record
+function BCBPIISanitizerHandler:header_filter(config)
+  if kong.ctx.shared.pii_sanitizer then
+    kong.response.set_header("X-BCB-Compliance-Verified", "true")
+    local count = kong.ctx.shared.pii_sanitizer.pii_identified or 0
+    kong.response.set_header("X-BCB-PII-Entities-Redacted", tostring(count))
   end
 end
 

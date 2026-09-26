@@ -192,3 +192,32 @@ def test_token_vault_lru_eviction():
     assert vault.active_sessions_count == 3
     assert vault.get_session("s1") is None
     assert vault.get_session("s4") is not None
+
+
+def test_reversible_vault_pix_and_rg():
+    """Tests round-trip sanitization and re-identification for PIX_KEY (EVP) and RG."""
+    session_id = "sess-pix-rg-vault-01"
+    evp = "b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e"
+    rg = "23.456.789-X"
+    original = f"Transferir para chave pix {evp} do titular com RG {rg}."
+
+    # 1. Sanitize with synthetic
+    res_san = client.post(
+        "/sanitize",
+        json={"text": original, "redact_type": "synthetic", "session_id": session_id},
+    )
+    assert res_san.status_code == 200
+    san_text = res_san.json()["sanitized_text"]
+    assert evp not in san_text
+    assert rg not in san_text
+
+    # 2. Re-identify
+    res_reid = client.post(
+        "/re-identify",
+        json={"text": san_text, "session_id": session_id},
+    )
+    assert res_reid.status_code == 200
+    reid_data = res_reid.json()
+    assert reid_data["restored_entities"] == 2
+    assert evp in reid_data["reidentified_text"]
+    assert rg in reid_data["reidentified_text"]
