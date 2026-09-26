@@ -51,6 +51,25 @@ def validate_cnpj_digits(cnpj_digits: str) -> bool:
     return int(cnpj_digits[13]) == second_check
 
 
+def validate_luhn_checksum(card_digits: str) -> bool:
+    """Validates a payment card number (PAN) using the ISO/IEC 7812 Luhn (Mod 10) algorithm."""
+    if not card_digits.isdigit() or len(card_digits) < 13 or len(card_digits) > 19:
+        return False
+    if card_digits == card_digits[0] * len(card_digits):
+        return False
+
+    total = 0
+    reverse_digits = card_digits[::-1]
+    for i, char in enumerate(reverse_digits):
+        n = int(char)
+        if i % 2 == 1:
+            n *= 2
+            if n > 9:
+                n -= 9
+        total += n
+    return total % 10 == 0
+
+
 # ── Synthetic Generator Functions ─────────────────────────────────────────────
 
 
@@ -117,6 +136,23 @@ def generate_synthetic_bank_account() -> str:
     return f"Agência {ag} Conta {cc}-{dig}"
 
 
+def generate_synthetic_credit_card(brand_prefix: str = "4") -> str:
+    """Generates a mathematically valid synthetic credit card number formatted in 4 blocks."""
+    digits = [int(d) for d in brand_prefix] + [random.randint(0, 9) for _ in range(15 - len(brand_prefix))]
+    total = 0
+    for i, d in enumerate(reversed(digits)):
+        n = d
+        if i % 2 == 0:
+            n *= 2
+            if n > 9:
+                n -= 9
+        total += n
+    check_digit = (10 - (total % 10)) % 10
+    digits.append(check_digit)
+    s = "".join(str(d) for d in digits)
+    return f"{s[:4]} {s[4:8]} {s[8:12]} {s[12:]}"
+
+
 # ── Compiled Patterns and Priorities ──────────────────────────────────────────
 
 PII_PATTERNS: List[Tuple[str, re.Pattern, int]] = [
@@ -128,6 +164,12 @@ PII_PATTERNS: List[Tuple[str, re.Pattern, int]] = [
     ("CNPJ", re.compile(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}"), 0),
     # Raw CNPJ: 14 exact digits
     ("CNPJ", re.compile(r"\b\d{14}\b"), 1),
+    # Formatted Credit Card (16 digits): 4532 1234 5678 9010 or 4532-1234-5678-9010 or 4532.1234.5678.9010
+    ("CREDIT_CARD", re.compile(r"\b(?:\d{4}[-\s.]){3}\d{4}\b"), 0),
+    # Formatted Amex Card (15 digits): 3400 123456 78901
+    ("CREDIT_CARD", re.compile(r"\b3[47]\d{2}[-\s.]\d{6}[-\s.]\d{5}\b"), 0),
+    # Raw Credit Card: 15 or 16 exact digits (Luhn gated)
+    ("CREDIT_CARD", re.compile(r"\b\d{15,16}\b"), 1),
     # Email
     ("EMAIL", re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"), 0),
     # Phone numbers: captures Brazilian mobile/landline formats while excluding arbitrary digit sequences
@@ -175,7 +217,7 @@ NORMALIZED_STOPWORDS = {
 
 def normalize_entity_key(pii_type: str, value: str) -> str:
     """Normalizes an entity value to a canonical key for deterministic matching."""
-    if pii_type in ("CPF", "CNPJ"):
+    if pii_type in ("CPF", "CNPJ", "CREDIT_CARD"):
         return f"{pii_type}:{re.sub(r'\D', '', value)}"
     elif pii_type in ("EMAIL", "NAME"):
         return f"{pii_type}:{value.strip().lower()}"
@@ -192,7 +234,7 @@ def normalize_entity_key(pii_type: str, value: str) -> str:
 
 def _format_synthetic(pii_type: str, raw_synthetic: str, original_value: str) -> str:
     """Formats the generated synthetic value to match the formatting style of the original."""
-    if pii_type in ("CPF", "CNPJ"):
+    if pii_type in ("CPF", "CNPJ", "CREDIT_CARD"):
         if re.match(r"^\d+$", original_value):
             return re.sub(r"\D", "", raw_synthetic)
     return raw_synthetic
@@ -245,6 +287,17 @@ def detect_and_sanitize(
                 else:
                     checksum_valid = is_valid
 
+            elif pii_type == "CREDIT_CARD":
+                digits = re.sub(r"\D", "", value)
+                is_valid = validate_luhn_checksum(digits)
+                is_raw = bool(re.match(r"^\d{15,19}$", value))
+                if is_raw:
+                    if not is_valid:
+                        continue  # Raw 15-16 digit numbers are only treated as credit cards if Luhn passes
+                    checksum_valid = True
+                else:
+                    checksum_valid = is_valid
+
             raw_matches.append((pii_type, match.start(), match.end(), value, priority, checksum_valid))
 
     # 2. Name heuristic scanning
@@ -275,7 +328,12 @@ def detect_and_sanitize(
         for pii_type, start, end, value, _, _ in filtered_matches:
             canon_key = normalize_entity_key(pii_type, value)
             if canon_key not in synthetic_map:
-                synthetic_map[canon_key] = _get_synthetic(pii_type)
+                synth = _get_synthetic(pii_type)
+                attempts = 0
+                while synth.strip().lower() == value.strip().lower() and attempts < 10:
+                    synth = _get_synthetic(pii_type)
+                    attempts += 1
+                synthetic_map[canon_key] = synth
 
     # 5. Replacement in reverse order
     sanitized = text
@@ -321,6 +379,7 @@ def _get_synthetic(pii_type: str) -> str:
     generators = {
         "CPF": generate_synthetic_cpf,
         "CNPJ": generate_synthetic_cnpj,
+        "CREDIT_CARD": generate_synthetic_credit_card,
         "EMAIL": generate_synthetic_email,
         "PHONE": generate_synthetic_phone,
         "NAME": generate_synthetic_name,

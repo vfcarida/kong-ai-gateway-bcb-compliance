@@ -16,6 +16,7 @@ This specification defines the HTTP REST interface exposed by the **PII Sanitize
 | Method | Path | Description | Production Available |
 |---|---|---|:---:|
 | `GET` | `/health` | Container readiness and operational health probe. | Yes |
+| `GET` | `/metrics` | Prometheus text-format operational and DLP telemetry metrics. | Yes |
 | `POST` | `/sanitize` | Real-time Brazilian PII detection and redaction engine. | Yes |
 | `POST` | `/re-identify` | Restores original PII entities from replacement tokens via session vault. | Yes |
 | `GET` | `/` | Service metadata and version discovery. | Yes |
@@ -43,10 +44,33 @@ Performs operational health verification for Kubernetes liveness/readiness probe
 
 ---
 
-## 2. `POST /sanitize`
+## 2. `GET /metrics`
 
 ### Description
-Scans input text, detects Brazilian financial and personal PII data (CPF, CNPJ, Bank Accounts, Phone Numbers, Emails, Full Names, Money), and applies placeholder redaction or deterministic synthetic substitution.
+Exposes operational metrics in the standard Prometheus / OpenMetrics text exposition format for Kubernetes ServiceMonitor and APM scraping.
+
+### Response (200 OK)
+```text
+Content-Type: text/plain; version=0.0.4; charset=utf-8
+
+# HELP pii_sanitizer_requests_total Total HTTP requests handled by the PII sanitizer
+# TYPE pii_sanitizer_requests_total counter
+pii_sanitizer_requests_total{endpoint="/sanitize",status="200"} 42
+# HELP pii_sanitizer_entities_detected_total Total PII entities intercepted and redacted
+# TYPE pii_sanitizer_entities_detected_total counter
+pii_sanitizer_entities_detected_total{type="CPF"} 18
+pii_sanitizer_entities_detected_total{type="CREDIT_CARD"} 6
+# HELP pii_vault_active_sessions Number of currently active sessions in the token vault
+# TYPE pii_vault_active_sessions gauge
+pii_vault_active_sessions 3
+```
+
+---
+
+## 3. `POST /sanitize`
+
+### Description
+Scans input text, detects Brazilian financial and personal PII data (CPF, CNPJ, Payment Cards/PAN, Bank Accounts, Phone Numbers, Emails, Full Names, Money), and applies placeholder redaction or deterministic synthetic substitution. All CPF, CNPJ, and Payment Cards are mathematically verified using Modulo-11 and ISO/IEC 7812 Luhn checksums.
 
 ### Request Body (`SanitizeRequest`)
 ```json

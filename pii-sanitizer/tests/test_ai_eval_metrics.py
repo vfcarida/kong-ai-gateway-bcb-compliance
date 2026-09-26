@@ -140,6 +140,23 @@ BENCHMARK_DATASET: List[BenchmarkSample] = [
             GroundTruthEntity("BANK_ACCOUNT", "ag 3456 conta 87654-3"),
         ],
     ),
+    # Scenario 11: Credit Card Fraud Dispute with Formatted Card
+    BenchmarkSample(
+        sample_id="banking_credit_card_dispute_11",
+        text="Favor estornar compra no cartao 5555 5555 5555 4444 cobrada indevidamente.",
+        expected_entities=[
+            GroundTruthEntity("CREDIT_CARD", "5555 5555 5555 4444"),
+        ],
+    ),
+    # Scenario 12: Multi-PII Verification with Raw Card Number and Formatted CPF
+    BenchmarkSample(
+        sample_id="banking_raw_card_kyc_12",
+        text="Confirmacao de seguranca: cartao titular 5555555555554444 e CPF 123.456.789-09.",
+        expected_entities=[
+            GroundTruthEntity("CREDIT_CARD", "5555555555554444"),
+            GroundTruthEntity("CPF", "123.456.789-09"),
+        ],
+    ),
     # ── Negative Controls (Adversarial Non-PII to test False-Positive Resistance) ─
     BenchmarkSample(
         sample_id="neg_ctrl_order_and_tracking",
@@ -168,6 +185,12 @@ BENCHMARK_DATASET: List[BenchmarkSample] = [
     BenchmarkSample(
         sample_id="neg_ctrl_uuid_and_hashes",
         text="O correlation ID da requisição é 4a8e63b2-9d71-482a-bc93-61d0f507b992 e o commit é e353924e1ce7ab22a7e8cbf10f0e2b639b9f64aa.",
+        expected_entities=[],
+        is_negative_control=True,
+    ),
+    BenchmarkSample(
+        sample_id="neg_ctrl_16_digit_barcode",
+        text="O codigo de barras da guia de recolhimento e 1234567890123456 para pagamento no terminal.",
         expected_entities=[],
         is_negative_control=True,
     ),
@@ -300,12 +323,12 @@ def test_pii_evaluation_metrics_benchmark():
     assert micro.f1 >= 0.92, f"Aggregated F1-Score {micro.f1:.3f} below target threshold 0.92"
 
 
-def test_zero_leakage_guarantee_cpf_cnpj():
-    """Asserts Zero Leakage (FNR = 0.00%, FN = 0) on regulated national identifiers (CPF, CNPJ)."""
+def test_zero_leakage_guarantee_regulated_identifiers():
+    """Asserts Zero Leakage (FNR = 0.00%, FN = 0) on regulated identifiers (CPF, CNPJ, CREDIT_CARD)."""
     per_class, _, _ = evaluate_benchmark(BENCHMARK_DATASET)
 
     # Regulated Identifiers must have ZERO False Negatives
-    for identifier in ("CPF", "CNPJ"):
+    for identifier in ("CPF", "CNPJ", "CREDIT_CARD"):
         assert identifier in per_class, f"Identifier {identifier} not evaluated in benchmark"
         m = per_class[identifier]
         assert m.fn == 0, f"DATA LEAKAGE DETECTED: {identifier} had {m.fn} false negatives! FNR={m.fnr * 100:.2f}%"

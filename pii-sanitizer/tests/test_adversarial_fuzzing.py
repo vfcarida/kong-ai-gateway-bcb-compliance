@@ -22,6 +22,7 @@ from app.main import app
 from app.pii_engine import (
     validate_cpf_digits,
     validate_cnpj_digits,
+    validate_luhn_checksum,
     detect_and_sanitize,
 )
 from app.schemas import RedactType
@@ -93,6 +94,25 @@ def test_cnpj_boundary_lengths():
     assert validate_cnpj_digits("") is False
     assert validate_cnpj_digits("1122233300018") is False  # 13 digits
     assert validate_cnpj_digits("112223330001811") is False  # 15 digits
+
+
+@pytest.mark.parametrize("digit", [str(d) for d in range(10)])
+def test_raw_identical_digits_never_detected_as_credit_card(digit):
+    """Raw 16-digit sequences with identical digits must NOT be flagged as credit card."""
+    raw_number = digit * 16
+    res = client.post("/sanitize", json={"text": f"Lote {raw_number} registrado", "redact_type": "placeholder"})
+    assert res.status_code == 200
+    data = res.json()
+    cards = [e for e in data["pii_detected"] if e["type"] == "CREDIT_CARD"]
+    assert len(cards) == 0
+
+
+def test_credit_card_boundary_lengths():
+    """Lengths other than 13-19 digits or invalid characters must fail validation."""
+    assert validate_luhn_checksum("") is False
+    assert validate_luhn_checksum("123456789012") is False  # 12 digits (too short)
+    assert validate_luhn_checksum("12345678901234567890") is False  # 20 digits (too long)
+    assert validate_luhn_checksum("555555555555444a") is False
 
 
 # ── 2. Zero-Width & Invisible Characters ───────────────────────────────────────

@@ -108,6 +108,11 @@ class TokenVault:
         with self._lock:
             return len(self._sessions)
 
+    @property
+    def total_tokens_count(self) -> int:
+        with self._lock:
+            return sum(len(s.reverse_map) for s in self._sessions.values())
+
 
 # Global default vault instance
 GLOBAL_TOKEN_VAULT = TokenVault(max_sessions=1000)

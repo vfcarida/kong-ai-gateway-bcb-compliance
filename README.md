@@ -213,7 +213,8 @@ kong-ai-gateway-bcb-compliance/
 │   │   ├── main.py                   # FastAPI app with RFC 7807 problem details
 │   │   ├── pii_engine.py             # Checksum-gated engines (CPF/CNPJ) & synthetic generators
 │   │   ├── schemas.py                # Pydantic request/response & RFC 7807 models
-│   │   └── token_vault.py            # In-memory Reversible Token Vault with LRU eviction
+│   │   ├── token_vault.py            # In-memory Reversible Token Vault with LRU eviction
+│   │   └── metrics.py                # Prometheus / OpenMetrics thread-safe telemetry collector
 │   ├── certs/                        # Self-signed dev certificates for TLS encryption
 │   ├── tests/
 │   │   ├── test_sanitizer.py         # Core PII detection & checksum tests
@@ -244,10 +245,11 @@ kong-ai-gateway-bcb-compliance/
 Targeted detection with mathematical validation:
 - **CPF Numbers**: Formatted (`123.456.789-00`) and raw numeric strings (`12345678900`) validated via mathematical checksum algorithm (`_validate_cpf_digits`). Raw 11-digit numbers that fail checksum are preserved to prevent false positives on order IDs and phone numbers.
 - **CNPJ Numbers**: Formatted (`11.222.333/0001-81`) and raw numeric strings validated via two-digit checksum verification (`_validate_cnpj_digits`).
+- **Payment Card Numbers (PAN / Credit & Debit Cards)**: Formatted (16-digit Visa/Mastercard/Elo and 15-digit Amex) and raw numeric strings strictly validated using the **ISO/IEC 7812 Luhn (Mod 10) algorithm** (`validate_luhn_checksum`). Non-card numeric sequences failing Luhn are discarded, preventing false-positive over-redaction on barcodes or order tracking IDs. Complies with **PCI-DSS v4.0 Requirement 3.3** and BCB Resolução CMN 4.893 (see [ADR 0005](docs/adr/0005-payment-card-luhn-pci-dss-detection.md)).
 - **Financial Account Details**: Agência, Conta Corrente, and PIX references.
 - **Monetary Amounts**: Brazilian currency expressions (e.g., `R$ 50.000,00`).
 - **Modes**:
-  - `placeholder`: Replaces items with `[REDACTED_CPF_1]`, `[REDACTED_BANK_ACCOUNT_1]`.
+  - `placeholder`: Replaces items with `[REDACTED_CPF_1]`, `[REDACTED_CREDIT_CARD_1]`, `[REDACTED_BANK_ACCOUNT_1]`.
   - `synthetic`: Generates mathematically valid synthetic credentials to maintain semantic context for the LLM.
 - **Heuristic Boundaries**: Regex and checksum algorithms provide a robust defensive layer against accidental data transmission, but do not provide mathematical guarantees against adversarial or highly ambiguous unstructured text.
 
@@ -284,9 +286,16 @@ Enables conversational systems to recover customer-specific PII when downstream 
 ### 6. AI Engineering DLP Quantitative Evaluation Benchmark
 Automated statistical benchmark asserting DLP performance in conversational Brazilian banking dialogues:
 - **Micro-Metrics**: Asserts Micro-Precision $\ge 90\%$, Micro-Recall $\ge 95\%$, and Micro-F1 $\ge 92\%$.
-- **Zero-Leakage Guarantee**: Enforces False Negative Rate ($\text{FNR} = 0.00\%$) and zero leakage count on regulated Modulo-11 national identifiers (CPF and CNPJ).
-- **Adversarial Negative Control Testing**: Asserts 0 false positives against tracking codes, order numbers, technical terms, and institutional acronyms.
-- **Latency SLA Verification**: Validates that P95 processing latency remains strictly under $15.0\text{ ms}$ (measured at $0.28\text{ ms}$). Detailed in the [AI Evaluation Guide](docs/guides/ai-engineering-evaluation.md).
+- **Zero-Leakage Guarantee**: Enforces False Negative Rate ($\text{FNR} = 0.00\%$) and zero leakage count on regulated national identifiers (CPF, CNPJ, and Payment Cards/PAN).
+- **Adversarial Negative Control Testing**: Asserts 0 false positives against tracking codes, barcodes, order numbers, technical terms, and institutional acronyms.
+- **Latency SLA Verification**: Validates that P95 processing latency remains strictly under $15.0\text{ ms}$ (measured at $0.16\text{ ms}$). Detailed in the [AI Evaluation Guide](docs/guides/ai-engineering-evaluation.md).
+
+### 7. Cloud-Native Observability & Prometheus Metrics (`GET /metrics`)
+Exposes operational telemetry in standard Prometheus / OpenMetrics text exposition format:
+- Counters: `pii_sanitizer_requests_total{endpoint, status}`, `pii_sanitizer_entities_detected_total{type}`.
+- Latency Summaries: `pii_sanitizer_processing_seconds`.
+- Gauges: `pii_vault_active_sessions`, `pii_vault_stored_tokens`.
+- Native Kubernetes `ServiceMonitor` scraping support over TLS (`port: 8443`).
 
 ---
 
@@ -389,10 +398,10 @@ curl -i -X POST http://localhost:8000/llm-proxy \
 
 ## 🧪 Testing & Quality Assurance Suite
 
-The repository contains comprehensive test suites covering **129 automated tests** across Python and Lua:
+The repository contains comprehensive test suites covering **147 automated tests** across Python and Lua:
 
-### 1. Python Pytest Microservice Suite (129 tests)
-Covers PII detection, CPF/CNPJ checksum validation, adversarial fuzzing (zero-width spaces, homoglyphs, repeated digits), reversible token vault de-anonymization, AI DLP quantitative precision/recall benchmark (zero-leakage verification), Helm chart structure, K8s manifests, TLS hardening, and OTel redaction:
+### 1. Python Pytest Microservice Suite (147 tests)
+Covers PII detection, CPF/CNPJ Modulo-11 and Payment Card ISO/IEC 7812 Luhn checksum validation, adversarial fuzzing (zero-width spaces, homoglyphs, repeated digits), reversible token vault de-anonymization, AI DLP quantitative precision/recall benchmark (zero-leakage verification), Prometheus `/metrics` operational contracts, Helm chart structure, K8s manifests, TLS hardening, and OTel redaction:
 ```bash
 pip install -r pii-sanitizer/requirements.txt pytest httpx
 pytest pii-sanitizer/tests/ -v
@@ -491,6 +500,7 @@ Kong Gateway serializes structured audit records to `/tmp/audit-logs/kong-audit.
 - [ADR 0002: OpenTelemetry GenAI Privacy Scrubbing & Telemetry Preservation](docs/adr/0002-otel-genai-privacy-scrubbing.md)
 - [ADR 0003: Session-Consistent Deterministic Synthetic Entity Pseudonymization](docs/adr/0003-session-consistent-synthetic-pseudonymization.md)
 - [ADR 0004: Reversible Tokenization Vault & Egress Re-Identification](docs/adr/0004-reversible-token-vault-re-identification.md)
+- [ADR 0005: Payment Card (PAN) Detection via ISO/IEC 7812 Luhn Algorithm & PCI-DSS Guardrails](docs/adr/0005-payment-card-luhn-pci-dss-detection.md)
 
 ---
 

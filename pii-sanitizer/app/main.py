@@ -11,7 +11,7 @@ import time
 import logging
 from typing import Dict, Any
 
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, Request, Response, status
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 
@@ -25,6 +25,7 @@ from app.schemas import (
 )
 from app.pii_engine import detect_and_sanitize, normalize_entity_key
 from app.token_vault import GLOBAL_TOKEN_VAULT
+from app.metrics import GLOBAL_METRICS
 
 # ── Logging Setup ─────────────────────────────────────────────────────────────
 
@@ -100,7 +101,24 @@ async def generic_exception_handler(request: Request, exc: Exception):
 @app.get("/health", response_model=HealthResponse, tags=["Operational"])
 async def health_check():
     """Health check endpoint for container readiness probes."""
+    GLOBAL_METRICS.record_request("/health", 200, 0.0)
     return HealthResponse()
+
+
+@app.get("/metrics", tags=["Operational"])
+async def prometheus_metrics():
+    """
+    Exposes real-time Prometheus text metrics for APM, Prometheus scraper,
+    OpenTelemetry Collector, and Kubernetes ServiceMonitor.
+    """
+    metrics_text = GLOBAL_METRICS.generate_prometheus_text(
+        active_vault_sessions=GLOBAL_TOKEN_VAULT.active_sessions_count,
+        total_vault_tokens=GLOBAL_TOKEN_VAULT.total_tokens_count,
+    )
+    return Response(
+        content=metrics_text,
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )
 
 
 @app.post("/sanitize", response_model=SanitizeResponse, tags=["PII Engine"])
@@ -109,6 +127,7 @@ async def sanitize_text(request_data: SanitizeRequest):
     Performs real-time text analysis to intercept and redact Brazilian PII data.
     """
     if not request_data.text or not request_data.text.strip():
+        GLOBAL_METRICS.record_request("/sanitize", 400, 0.0)
         problem = ProblemDetails(
             type="https://tools.ietf.org/html/rfc7807#section-3.1",
             title="Bad Request",
@@ -143,7 +162,14 @@ async def sanitize_text(request_data: SanitizeRequest):
                 entity.replacement,
             )
 
+    GLOBAL_METRICS.record_request("/sanitize", 200, result.processing_time_ms / 1000.0)
+
     if result.total_entities > 0:
+        entity_counts: Dict[str, int] = {}
+        for entity in result.pii_detected:
+            entity_counts[entity.type] = entity_counts.get(entity.type, 0) + 1
+        GLOBAL_METRICS.record_entities(entity_counts)
+
         logger.info(
             "PII Intercepted: %d entities [%s] | latency: %.2fms",
             result.total_entities,
@@ -163,6 +189,7 @@ async def reidentify_text(request_data: ReidentifyRequest):
     """
     start_time = time.perf_counter()
     if not request_data.text or not request_data.text.strip():
+        GLOBAL_METRICS.record_request("/re-identify", 400, 0.0)
         problem = ProblemDetails(
             type="https://tools.ietf.org/html/rfc7807#section-3.1",
             title="Bad Request",
@@ -181,6 +208,7 @@ async def reidentify_text(request_data: ReidentifyRequest):
         request_data.text,
     )
     elapsed_ms = (time.perf_counter() - start_time) * 1000
+    GLOBAL_METRICS.record_request("/re-identify", 200, elapsed_ms / 1000.0)
 
     logger.info(
         "Re-identification executed for session %s: restored %d entities | latency: %.2fms",

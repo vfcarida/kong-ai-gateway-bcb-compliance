@@ -30,14 +30,14 @@ class SanitizeRequest(BaseModel):
 
 class PIIEntity(BaseModel):
     """Details of a single detected PII entity."""
-    type: str = Field(..., description="Category of PII (CPF, CNPJ, BANK_ACCOUNT, EMAIL, PHONE, NAME, MONEY)")
+    type: str = Field(..., description="Category of PII (CPF, CNPJ, CREDIT_CARD, BANK_ACCOUNT, EMAIL, PHONE, NAME, MONEY)")
     original: str = Field(..., description="Matched original sensitive string")
     replacement: str = Field(..., description="Obfuscated replacement string applied")
     start: int = Field(..., description="Start character offset")
     end: int = Field(..., description="End character offset")
     checksum_valid: Optional[bool] = Field(
         default=None,
-        description="Result of checksum validation for CPF/CNPJ (None if not applicable)",
+        description="Result of checksum validation for CPF/CNPJ/CREDIT_CARD (None if not applicable)",
     )
 
 

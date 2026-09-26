@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from app.main import app
-from app.pii_engine import validate_cpf_digits, validate_cnpj_digits
+from app.pii_engine import validate_cpf_digits, validate_cnpj_digits, validate_luhn_checksum
 
 client = TestClient(app)
 
@@ -27,6 +27,17 @@ def test_health_endpoint():
     assert "BCB" in data["compliance"]
 
 
+def test_prometheus_metrics_endpoint():
+    response = client.get("/metrics")
+    assert response.status_code == 200
+    assert "text/plain" in response.headers["content-type"]
+    content = response.text
+    assert "pii_sanitizer_requests_total" in content
+    assert "pii_sanitizer_entities_detected_total" in content
+    assert "pii_sanitizer_processing_seconds" in content
+    assert "pii_vault_active_sessions" in content
+
+
 def test_validate_cpf_checksums():
     assert validate_cpf_digits("12345678909") is True
     assert validate_cpf_digits("11111111111") is False  # All identical digits
@@ -36,6 +47,14 @@ def test_validate_cpf_checksums():
 def test_validate_cnpj_checksums():
     assert validate_cnpj_digits("11222333000181") is True
     assert validate_cnpj_digits("00000000000000") is False
+
+
+def test_validate_luhn_checksums():
+    assert validate_luhn_checksum("5555555555554444") is True
+    assert validate_luhn_checksum("5555555555554445") is False
+    assert validate_luhn_checksum("0000000000000000") is False
+    assert validate_luhn_checksum("4532abcd1234efgh") is False
+    assert validate_luhn_checksum("1234567890") is False
 
 
 def test_sanitize_placeholder():
@@ -61,6 +80,33 @@ def test_sanitize_synthetic():
     data = response.json()
     assert "123.456.789-00" not in data["sanitized_text"]
     assert data["total_entities"] >= 1
+
+
+def test_sanitize_credit_card_placeholder():
+    payload = {
+        "text": "Favor estornar compra no cartao 4532 1234 5678 9010 urgente",
+        "redact_type": "placeholder",
+    }
+    response = client.post("/sanitize", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+    assert "[REDACTED_CREDIT_CARD_1]" in data["sanitized_text"]
+    assert any(e["type"] == "CREDIT_CARD" for e in data["pii_detected"])
+
+
+def test_sanitize_credit_card_synthetic():
+    payload = {
+        "text": "Cartao 5555555555554444 cadastrado",
+        "redact_type": "synthetic",
+    }
+    response = client.post("/sanitize", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+    card_entity = next(e for e in data["pii_detected"] if e["type"] == "CREDIT_CARD")
+    assert card_entity["checksum_valid"] is True
+    import re
+    digits = re.sub(r"\D", "", card_entity["replacement"])
+    assert validate_luhn_checksum(digits) is True
 
 
 def test_synthetic_consistency_repeated_cpf_in_single_prompt():
@@ -217,6 +263,9 @@ LABELLED_DETECTION_CASES = [
     ("bank_account_compound_reverse", "Creditado em Conta 56789-0 Agência 1234 hoje", "BANK_ACCOUNT", None, True),
     ("money_trailing_period", "O saldo restante é R$ 150,00.", "MONEY", None, True),
     ("money_trailing_comma", "O total foi R$ 50, mas com desconto.", "MONEY", None, True),
+    ("formatted_credit_card_valid", "Cartao final 5555-5555-5555-4444 ativo", "CREDIT_CARD", True, True),
+    ("raw_credit_card_valid", "Transacao no cartao 5555555555554444 aprovada", "CREDIT_CARD", True, True),
+    ("raw_16_digits_invalid_card", "Codigo de rastreamento 1234567890123456 do pedido", "CREDIT_CARD", None, False),
 ]
 
 
