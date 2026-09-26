@@ -398,10 +398,10 @@ curl -i -X POST http://localhost:8000/llm-proxy \
 
 ## 🧪 Testing & Quality Assurance Suite
 
-The repository contains comprehensive test suites covering **147 automated tests** across Python and Lua:
+The repository contains comprehensive test suites covering **160 automated tests** across Python and Lua:
 
-### 1. Python Pytest Microservice Suite (147 tests)
-Covers PII detection, CPF/CNPJ Modulo-11 and Payment Card ISO/IEC 7812 Luhn checksum validation, adversarial fuzzing (zero-width spaces, homoglyphs, repeated digits), reversible token vault de-anonymization, AI DLP quantitative precision/recall benchmark (zero-leakage verification), Prometheus `/metrics` operational contracts, Helm chart structure, K8s manifests, TLS hardening, and OTel redaction:
+### 1. Python Pytest Microservice Suite (160 tests)
+Covers PII detection, CPF/CNPJ Modulo-11, Payment Card ISO/IEC 7812 Luhn, and BCB PIX EVP/RG validation, batch RAG ingestion (`/sanitize-batch`), adversarial fuzzing (zero-width spaces, homoglyphs, repeated digits), reversible token vault de-anonymization, AI DLP quantitative precision/recall benchmark (zero-leakage verification), Prometheus `/metrics` operational contracts, Helm chart structure, K8s manifests, TLS hardening, and OTel redaction:
 ```bash
 pip install -r pii-sanitizer/requirements.txt pytest httpx
 pytest pii-sanitizer/tests/ -v

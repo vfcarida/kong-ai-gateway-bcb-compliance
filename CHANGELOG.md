@@ -28,8 +28,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **CI/CD Pipeline Hardening**: Added Helm chart linting (`helm lint`) and an automated AI DLP evaluation reporting step to `.github/workflows/ci-cd.yml`.
 - **Defensive Checksum Validation**: Guarded `validate_cpf_digits`, `validate_cnpj_digits`, and `validate_luhn_checksum` against non-digit inputs with `.isdigit()` and identical-digit rejection.
 - **Flexible Whitespace in Money Pattern**: Updated MONEY regex in `pii_engine.py` to support variable spaces/tabs between currency symbol and amount.
-- **Financial Stopwords Expansion & Multi-Word Phrase Matching**: Added banking domain terms to `NORMALIZED_STOPWORDS` and enabled multi-word phrase matching in `pii_engine.py` to prevent false-positive name detections on institutional entities (e.g. "Sistema Financeiro Nacional", "Banco Central do Brasil").
-- **Quality Assurance**: Expanded automated test suite to **147 passing tests** across 8 test suites.
+- **BCB PIX Random Key / EVP & RG Document Detection (SEC-04)**: Added detection and format-preserving synthetic generation for BCB Resolution 1/2020 PIX Random Keys (Chave Aleatória / EVP UUID v4) and Brazilian RG documents (`XX.XXX.XXX-X`). Uses context-gated UUID matching to eliminate false-positive redactions on operational correlation IDs and APM trace spans. Documented in [ADR 0006](docs/adr/0006-pix-key-evp-detection-bcb-res-1-2020.md).
+- **Kong Gateway Session Tracking & Compliance Headers (FEAT-07)**: Propagates incoming `X-Session-ID`, `x-session-id`, or completions `user` parameter from Kong Gateway to the sanitizer sidecar. Injects upstream compliance audit headers (`X-BCB-PII-Sanitized`, `X-BCB-PII-Entities-Count`, `X-BCB-Session-ID`) and downstream verification headers (`X-BCB-Compliance-Verified`, `X-BCB-PII-Entities-Redacted`).
+- **High-Throughput Batch Sanitization API (FEAT-08)**: Added `POST /sanitize-batch` endpoint designed for enterprise RAG (Retrieval Augmented Generation) chunk ingestion and bulk document pre-filtering, guaranteeing cross-chunk synthetic pseudonym consistency within batches and conversation sessions.
+- **Maximum Payload Length Guard & DoS/ReDoS Protection (SEC-05)**: Enforces `MAX_PII_TEXT_LENGTH = 1,000,000` (1MB character bound per prompt) and `MAX_BATCH_ITEMS = 100`, rejecting oversized requests with RFC 7807 HTTP 413 `Payload Too Large` Problem Details before regex execution.
+- **Quality Assurance**: Expanded automated test suite to **160 passing tests** across 9 test suites.
 
 ## [2.1.0] — 2026-09-21
 
