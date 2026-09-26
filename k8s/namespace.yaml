@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kong-ai-compliance
+  labels:
+    app.kubernetes.io/name: kong-ai-gateway-bcb-compliance
+    app.kubernetes.io/part-of: bcb-compliance-firewall

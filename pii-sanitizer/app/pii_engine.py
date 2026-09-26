@@ -17,7 +17,7 @@ from app.schemas import RedactType, PIIEntity, SanitizeResponse
 
 def validate_cpf_digits(cpf_digits: str) -> bool:
     """Validates a Brazilian CPF checksum (11 digits)."""
-    if len(cpf_digits) != 11 or cpf_digits == cpf_digits[0] * 11:
+    if len(cpf_digits) != 11 or not cpf_digits.isdigit() or cpf_digits == cpf_digits[0] * 11:
         return False
 
     total = sum(int(cpf_digits[i]) * (10 - i) for i in range(9))
@@ -34,7 +34,7 @@ def validate_cpf_digits(cpf_digits: str) -> bool:
 
 def validate_cnpj_digits(cnpj_digits: str) -> bool:
     """Validates a Brazilian CNPJ checksum (14 digits)."""
-    if len(cnpj_digits) != 14 or cnpj_digits == cnpj_digits[0] * 14:
+    if len(cnpj_digits) != 14 or not cnpj_digits.isdigit() or cnpj_digits == cnpj_digits[0] * 14:
         return False
 
     weights_1 = [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]
@@ -139,7 +139,7 @@ PII_PATTERNS: List[Tuple[str, re.Pattern, int]] = [
         0,
     ),
     # Currency: trimmed so trailing punctuation (. or ,) is never captured
-    ("MONEY", re.compile(r"R\$\s?[\d.,]*\d"), 0),
+    ("MONEY", re.compile(r"R\$\s*[\d.,]*\d"), 0),
     # Compound Bank Account: keyword-separated (e.g. Agência <digits> ... Conta <digits>-<dig>)
     (
         "BANK_ACCOUNT",

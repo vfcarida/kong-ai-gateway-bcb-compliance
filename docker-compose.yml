@@ -23,6 +23,7 @@ services:
       - PORT=8443
       - SSL_KEYFILE=/app/certs/dev-key.pem
       - SSL_CERTFILE=/app/certs/dev-cert.pem
+      - ENABLE_MOCK_LLM=${ENABLE_MOCK_LLM:-true}
     ports:
       - "8088:8443" # Host port 8088 maps to container HTTPS port 8443 (diagnostics / verify plaintext rejection)
     networks:

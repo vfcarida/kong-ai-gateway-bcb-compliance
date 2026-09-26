@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: kong-ai-compliance
+
+resources:
+  - namespace.yaml
+  - kong-plugins.yaml
+  - pii-sanitizer.yaml
+  - otel-collector.yaml
+  - ingress.yaml
+
+commonLabels:
+  app.kubernetes.io/part-of: bcb-compliance-firewall
+  compliance.bcb.gov.br/cmn-4893: "true"

@@ -1,4 +1,4 @@
-.PHONY: help test test-lua test-e2e up-oss up-enterprise down restart logs status clean format lint
+.PHONY: help test test-lua test-e2e up-oss up-enterprise down restart logs status clean format lint certs certs-verify
 
 PYTHON ?= python
 PYTEST ?= pytest
@@ -14,6 +14,8 @@ help:
 	@echo "  make test            Run Python unit and integration test suite (FastAPI, PII, TLS)"
 	@echo "  make test-lua        Run Kong custom plugin Lua Busted specifications via Pongo"
 	@echo "  make test-e2e        Execute end-to-end proxy verification script"
+	@echo "  make certs           Generate ephemeral self-signed dev TLS certificates"
+	@echo "  make certs-verify    Verify validity and SANs of dev-cert.pem"
 	@echo "  make lint            Run static analysis and linting checks"
 	@echo "  make format          Auto-format Python codebases"
 	@echo "  make clean           Clean up local caches and temporary artifacts"
@@ -44,6 +46,12 @@ test-lua:
 
 test-e2e:
 	$(PYTHON) test_kong_proxy.py --prompt "Teste de transferencia para CPF 123.456.789-09"
+
+certs:
+	$(PYTHON) scripts/generate_dev_certs.py
+
+certs-verify:
+	$(PYTHON) scripts/generate_dev_certs.py --verify
 
 lint:
 	$(PYTHON) -m flake8 pii-sanitizer/ test_kong_proxy.py || true

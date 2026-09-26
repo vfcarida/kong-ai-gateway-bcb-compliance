@@ -146,6 +146,28 @@ async def sanitize_text(request_data: SanitizeRequest):
 # ── Mock LLM & Testing Endpoints ──────────────────────────────────────────────
 
 
+def is_mock_llm_enabled() -> bool:
+    """Checks whether Mock LLM and test probe endpoints are enabled."""
+    val = os.getenv("ENABLE_MOCK_LLM", "true").strip().lower()
+    return val in ("true", "1", "t", "yes", "y")
+
+
+def mock_disabled_response(path: str) -> JSONResponse:
+    """Returns RFC 7807 404 Not Found when mock LLM routes are disabled in production."""
+    problem = ProblemDetails(
+        type="https://tools.ietf.org/html/rfc7807#section-3.1",
+        title="Not Found",
+        status=status.HTTP_404_NOT_FOUND,
+        detail="Mock LLM endpoints are disabled in this environment (ENABLE_MOCK_LLM=false).",
+        instance=path,
+    )
+    return JSONResponse(
+        status_code=status.HTTP_404_NOT_FOUND,
+        content=problem.model_dump(exclude_none=True),
+        headers={"Content-Type": "application/problem+json"},
+    )
+
+
 @app.post("/mock-llm/v1/chat/completions", tags=["Mock LLM"])
 @app.post("/mock-llm", tags=["Mock LLM"])
 async def mock_llm_completion(request: Request):
@@ -153,6 +175,9 @@ async def mock_llm_completion(request: Request):
     Mock LLM completions endpoint mimicking OpenAI/Bedrock payloads.
     Calculates token counts for OWASP LLM10:2025 rate-limiting verification.
     """
+    if not is_mock_llm_enabled():
+        return mock_disabled_response(request.url.path)
+
     try:
         body_json = await request.json()
     except Exception:
@@ -194,12 +219,16 @@ async def mock_llm_completion(request: Request):
 @app.get("/mock-llm/last-request", tags=["Mock LLM"])
 async def get_last_llm_request():
     """Retrieves the last request payload received by the mock LLM."""
+    if not is_mock_llm_enabled():
+        return mock_disabled_response("/mock-llm/last-request")
     return last_llm_request
 
 
 @app.post("/mock-llm/reset", tags=["Mock LLM"])
 async def reset_last_llm_request():
     """Resets mock LLM state and session pseudonymization cache."""
+    if not is_mock_llm_enabled():
+        return mock_disabled_response("/mock-llm/reset")
     last_llm_request["payload"] = None
     last_llm_request["timestamp"] = None
     SESSION_SYNTHETIC_CACHE.clear()
@@ -210,18 +239,22 @@ async def reset_last_llm_request():
 @app.get("/", tags=["Operational"])
 async def root():
     """Root landing route."""
+    endpoints = {
+        "sanitize": "POST /sanitize",
+        "health": "GET /health",
+    }
+    if is_mock_llm_enabled():
+        endpoints.update({
+            "mock_llm": "POST /mock-llm/v1/chat/completions",
+            "mock_llm_last_request": "GET /mock-llm/last-request",
+            "mock_llm_reset": "POST /mock-llm/reset",
+        })
     return {
         "service": "PII Sanitizer & Mock LLM Controller",
         "version": "2.0.0",
         "compliance": "BCB CMN 4893/21 & BCB 85/21",
         "docs": "/docs",
-        "endpoints": {
-            "sanitize": "POST /sanitize",
-            "health": "GET /health",
-            "mock_llm": "POST /mock-llm/v1/chat/completions",
-            "mock_llm_last_request": "GET /mock-llm/last-request",
-            "mock_llm_reset": "POST /mock-llm/reset",
-        },
+        "endpoints": endpoints,
     }
 
 

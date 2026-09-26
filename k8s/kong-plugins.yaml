@@ -1,0 +1,30 @@
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: bcb-pii-sanitizer
+  namespace: kong-ai-compliance
+  labels:
+    app.kubernetes.io/name: kong-ai-gateway-bcb-compliance
+plugin: bcb-pii-sanitizer
+config:
+  sanitizer_url: "https://pii-sanitizer.kong-ai-compliance.svc.cluster.local:8443/sanitize"
+  ssl_verify: true
+  timeout_ms: 1500
+  keepalive_timeout_ms: 60000
+  keepalive_pool_size: 100
+  fail_open: false
+  redact_type: "placeholder"
+---
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: bcb-otel-scrubber
+  namespace: kong-ai-compliance
+  labels:
+    app.kubernetes.io/name: kong-ai-gateway-bcb-compliance
+plugin: bcb-otel-scrubber
+config:
+  log_redaction_marker: "[REDACTED_BY_BCB_SCRUBBER]"
+  scrub_request_body: true
+  scrub_response_body: true
+  preserve_finops_metrics: true

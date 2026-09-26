@@ -298,6 +298,17 @@ docker compose --profile enterprise up -d --build
 ```
 Includes: `kong-gateway-enterprise`, `pii-sanitizer`, `otel-collector`, `redis-vector`.
 
+#### 3. Production Kubernetes Deployment (Kong Ingress Controller & Kustomize)
+For cloud-native production environments (EKS, AKS, GKE, OpenShift), deploy declarative manifests including `KongPlugin` CRDs, `Deployment`, `Service`, `Ingress`, and `ConfigMap`:
+```bash
+# Deploy entire compliance stack using Kustomize:
+kubectl apply -k k8s/
+
+# Verify KongPlugin Custom Resources:
+kubectl get kongplugins -n kong-ai-compliance
+```
+See the [Production Hardening Guide](docs/guides/production-hardening.md) for mTLS, Secret Management, and WORM storage architecture.
+
 ### Readiness & Health Verification
 ```bash
 # 1. Gateway Operational Status (Admin API is hardened to container loopback only)
@@ -319,15 +330,16 @@ curl -i -X POST http://localhost:8000/llm-proxy \
 ### 🔒 Admin Plane & Transport Security Hardening (CMN 4.893/2021)
 - **Zero World-Reachable Admin Plane**: In accordance with cybersecurity best practices under CMN 4.893/2021, Kong's Admin API (`8001`, `8444`) and Kong Manager GUI (`8002`) are bound to loopback `127.0.0.1` and removed from host published ports. Administrative operations require internal container access (`docker exec`) or private management network routing. For Enterprise deployments, RBAC enforcement (`KONG_ENFORCE_RBAC: on`) is documented.
 - **Encrypted Kong ↔ Sanitizer Transport**: Sensitive financial prompt payloads are encrypted in transit between Kong Gateway and the PII Sanitizer microservice using TLS (`https://pii-sanitizer:8443`). Uvicorn terminates TLS via self-signed dev certificates in local sandbox mode, and mutual TLS (mTLS) with internal banking CA verification (`ssl_verify: true`) is the production target.
+- **Production Mock Route Lockdown (`ENABLE_MOCK_LLM`)**: To prevent development mock endpoints (`/mock-llm/*`) and memory inspection probes from being exposed in production environments, set `ENABLE_MOCK_LLM=false`. When disabled, mock routes return RFC 7807 `404 Not Found` Problem Details and do not record prompt payloads.
 
 ---
 
 ## 🧪 Testing & Quality Assurance Suite
 
-The repository contains four test suites covering **42+ automated tests**:
+The repository contains four test suites covering **109+ automated tests**:
 
-### 1. Python Pytest Microservice Suite (42 tests)
-Covers PII detection, CPF/CNPJ checksum validation, synthetic consistency, TLS hardening, and OTel redaction:
+### 1. Python Pytest Microservice Suite (109 tests)
+Covers PII detection, CPF/CNPJ checksum validation, adversarial fuzzing (zero-width spaces, homoglyphs, repeated digits), synthetic consistency, TLS hardening, and OTel redaction:
 ```bash
 pip install -r pii-sanitizer/requirements.txt pytest httpx
 pytest pii-sanitizer/tests/ -v
@@ -402,6 +414,18 @@ Kong Gateway serializes structured audit records to `/tmp/audit-logs/kong-audit.
   }
 }
 ```
+
+---
+
+## 📚 Documentation & Reference Guides
+
+- **Guides**:
+  - [Getting Started Guide](docs/guides/getting-started.md): Detailed local bootstrap, Docker Compose execution, and validation.
+  - [Production Hardening Guide](docs/guides/production-hardening.md): Enterprise security, mTLS, RBAC, WORM audit log retention, and secret management.
+  - [Brazilian Central Bank Regulatory Mapping](docs/guides/bcb-regulatory-mapping.md): Article-by-article cross-walk of CMN 4.893/2021, BCB 85/2021, and LGPD.
+- **Reference**:
+  - [Kong Plugin Configuration Reference](docs/reference/plugin-configuration.md): Schema options, defaults, and phases for `bcb-pii-sanitizer` and `bcb-otel-scrubber`.
+  - [PII Sanitizer API Specification (OpenAPI 3.1)](docs/reference/api-specification.md): REST endpoints, RFC 7807 problem details, and payload contracts.
 
 ---
 

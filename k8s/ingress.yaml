@@ -1,0 +1,20 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kong-ai-compliance-ingress
+  namespace: kong-ai-compliance
+  annotations:
+    konghq.com/plugins: "bcb-pii-sanitizer, bcb-otel-scrubber"
+    konghq.com/strip-path: "false"
+spec:
+  ingressClassName: kong
+  rules:
+    - http:
+        paths:
+          - path: /llm-proxy
+            pathType: Prefix
+            backend:
+              service:
+                name: pii-sanitizer
+                port:
+                  number: 8443

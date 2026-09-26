@@ -164,6 +164,35 @@ def test_mock_llm_completion():
     assert state_data["payload"]["messages"][0]["content"] == "Test prompt"
 
 
+def test_mock_llm_disabled_guard(monkeypatch):
+    """Verifies that setting ENABLE_MOCK_LLM=false blocks mock LLM routes with RFC 7807 404."""
+    monkeypatch.setenv("ENABLE_MOCK_LLM", "false")
+
+    # POST completions
+    payload = {"messages": [{"role": "user", "content": "Confidential prompt"}]}
+    res = client.post("/mock-llm/v1/chat/completions", json=payload)
+    assert res.status_code == 404
+    assert res.headers.get("content-type") == "application/problem+json"
+    body = res.json()
+    assert body["status"] == 404
+    assert "Not Found" in body["title"]
+    assert "disabled" in body["detail"]
+
+    # GET last-request
+    res_last = client.get("/mock-llm/last-request")
+    assert res_last.status_code == 404
+    assert res_last.headers.get("content-type") == "application/problem+json"
+
+    # POST reset
+    res_reset = client.post("/mock-llm/reset")
+    assert res_reset.status_code == 404
+    assert res_reset.headers.get("content-type") == "application/problem+json"
+
+    # Root endpoint should not list mock_llm endpoints
+    root_res = client.get("/")
+    assert "mock_llm" not in root_res.json()["endpoints"]
+
+
 # ── Labelled Verification Table (KAG-T03: Checksum-Gated Detection & Regex Fixes) ──
 
 LABELLED_DETECTION_CASES = [

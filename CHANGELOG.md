@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+- **Adversarial & PII Edge-Case Fuzzing Suite (TEST-02)**: Added comprehensive edge-case test suite (`pii-sanitizer/tests/test_adversarial_fuzzing.py`) verifying modulo-11 check-digit edge cases (all repeated sequences `000...` through `999...`), zero-width/invisible Unicode characters (`\u200B`, `\u200C`, `\u200D`, `\uFEFF`, `\u00A0`), homoglyphs/confusables, irregular whitespaces/tabs, large payloads, and RFC 7807 problem details contract compliance.
+- **Comprehensive Documentation & Reference Specifications (DOC-01)**: Created in-depth guides and API references in `docs/`:
+  - `docs/guides/getting-started.md`: Local deployment, Docker Compose execution, and curl verification.
+  - `docs/guides/production-hardening.md`: Enterprise architecture, mTLS, RBAC, WORM audit log retention, and secret vaults.
+  - `docs/guides/bcb-regulatory-mapping.md`: Exhaustive article-by-article regulatory cross-walk covering CMN 4.893/2021, BCB 85/2021, and LGPD.
+  - `docs/reference/plugin-configuration.md`: Parameter reference and schemas for `bcb-pii-sanitizer` and `bcb-otel-scrubber`.
+  - `docs/reference/api-specification.md`: OpenAPI 3.1 specification for the `pii-sanitizer` microservice.
+- **Automated Dev TLS Certificate Generator (SEC-01 / TECH-03)**: Added cross-platform certificate generation script (`scripts/generate_dev_certs.py`) powered by pure-Python `cryptography` library to create ephemeral RSA keys and X.509 v3 certificates with Subject Alternative Names (`localhost`, `pii-sanitizer`, `127.0.0.1`) on demand. Added `make certs` and `make certs-verify` targets, along with comprehensive secret management and rotation guidance in `SECURITY.md`.
+- **Production Mock LLM Disable Guard (TEST-03 / TECH-02)**: Added `ENABLE_MOCK_LLM` environment variable guard in `pii-sanitizer/app/main.py`. When set to `false`, all `/mock-llm` routes (`/v1/chat/completions`, `/last-request`, `/reset`) are locked down and return RFC 7807 404 Problem Details to prevent development mock routes and in-memory payloads from being exposed in production environments.
+- **Production Kubernetes Deployment Manifests (FEAT-04)**: Provided complete declarative Kubernetes manifests under `k8s/` using Kustomize (`kubectl apply -k k8s/`), including `KongPlugin` CRDs for `bcb-pii-sanitizer` and `bcb-otel-scrubber`, hardened `Deployment` and `ClusterIP` Service for `pii-sanitizer` (with non-root `securityContext`), OpenTelemetry Collector Contrib with span redaction ConfigMap, and Ingress routing rules.
+- **Defensive Checksum Validation**: Guarded `validate_cpf_digits` and `validate_cnpj_digits` against non-digit inputs with `.isdigit()` checks.
+- **Flexible Whitespace in Money Pattern**: Updated MONEY regex in `pii_engine.py` to support variable spaces/tabs between currency symbol and amount.
+
 ## [2.1.0] — 2026-09-21
 
 ### Added
