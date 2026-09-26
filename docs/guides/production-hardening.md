@@ -172,3 +172,24 @@ kubectl get kongplugins -n kong-ai-compliance
 - **`pii-sanitizer`**: 2-replica `Deployment` with non-root security context (`runAsNonRoot: true`, capabilities dropped) and `ClusterIP` HTTPS service.
 - **`otel-collector`**: OpenTelemetry Collector Contrib with span redaction pipeline.
 - **`Ingress`**: Ingress resource binding custom plugins to `/llm-proxy` routes.
+
+---
+
+## ⎈ 8. Helm Chart Deployment (`charts/kong-ai-gateway-bcb-compliance`)
+
+For organizations utilizing Helm, ArgoCD, or Flux for GitOps releases:
+
+```bash
+# 1. Lint the chart
+helm lint charts/kong-ai-gateway-bcb-compliance
+
+# 2. Dry-run template rendering
+helm template bcb-firewall charts/kong-ai-gateway-bcb-compliance --namespace kong-ai-compliance
+
+# 3. Install / Upgrade release
+helm upgrade --install bcb-firewall charts/kong-ai-gateway-bcb-compliance \
+  --namespace kong-ai-compliance \
+  --create-namespace \
+  --set replicaCount=3 \
+  --set env.enableMockLlm=false
+```

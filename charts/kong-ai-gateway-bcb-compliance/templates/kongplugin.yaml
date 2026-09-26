@@ -1,0 +1,32 @@
+{{- if .Values.kongPlugins.piiSanitizer.enabled }}
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: {{ include "kong-ai-compliance.fullname" . }}-pii-sanitizer
+  labels:
+    {{- include "kong-ai-compliance.labels" . | nindent 4 }}
+plugin: bcb-pii-sanitizer
+config:
+  sanitizer_url: "https://{{ include "kong-ai-compliance.fullname" . }}-sanitizer:{{ .Values.service.port }}/sanitize"
+  ssl_verify: {{ .Values.kongPlugins.piiSanitizer.sslVerify }}
+  timeout_ms: {{ .Values.kongPlugins.piiSanitizer.timeoutMs }}
+  keepalive_timeout_ms: {{ .Values.kongPlugins.piiSanitizer.keepaliveTimeoutMs }}
+  keepalive_pool_size: {{ .Values.kongPlugins.piiSanitizer.keepalivePoolSize }}
+  fail_open: {{ .Values.kongPlugins.piiSanitizer.failOpen }}
+  redact_type: {{ .Values.kongPlugins.piiSanitizer.redactType | quote }}
+{{- end }}
+---
+{{- if .Values.kongPlugins.otelScrubber.enabled }}
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: {{ include "kong-ai-compliance.fullname" . }}-otel-scrubber
+  labels:
+    {{- include "kong-ai-compliance.labels" . | nindent 4 }}
+plugin: bcb-otel-scrubber
+config:
+  log_redaction_marker: {{ .Values.kongPlugins.otelScrubber.logRedactionMarker | quote }}
+  scrub_request_body: true
+  scrub_response_body: true
+  preserve_finops_metrics: {{ .Values.kongPlugins.otelScrubber.preserveFinopsMetrics }}
+{{- end }}

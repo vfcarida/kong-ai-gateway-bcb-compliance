@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kong-ai-compliance.fullname" . }}-sanitizer
+  labels:
+    {{- include "kong-ai-compliance.labels" . | nindent 4 }}
+    app.kubernetes.io/component: pii-sanitizer
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "kong-ai-compliance.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: pii-sanitizer
+  template:
+    metadata:
+      labels:
+        {{- include "kong-ai-compliance.labels" . | nindent 8 }}
+        app.kubernetes.io/component: pii-sanitizer
+    spec:
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: pii-sanitizer
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: PORT
+              value: "{{ .Values.env.port }}"
+            - name: SSL_KEYFILE
+              value: "{{ .Values.env.sslKeyfile }}"
+            - name: SSL_CERTFILE
+              value: "{{ .Values.env.sslCertfile }}"
+            - name: ENABLE_MOCK_LLM
+              value: "{{ .Values.env.enableMockLlm }}"
+          ports:
+            - containerPort: {{ .Values.service.port }}
+              name: https
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.service.port }}
+              scheme: HTTPS
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.service.port }}
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3

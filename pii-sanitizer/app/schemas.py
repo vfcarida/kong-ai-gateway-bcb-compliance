@@ -54,6 +54,20 @@ class SanitizeResponse(BaseModel):
     redact_type: str = Field("placeholder", description="Applied redaction mode")
 
 
+class ReidentifyRequest(BaseModel):
+    """Payload sent to the re-identification / de-anonymization endpoint."""
+    text: str = Field(..., description="Sanitized text containing tokens or synthetic values to restore")
+    session_id: str = Field(..., description="Session ID holding the token vault mappings")
+
+
+class ReidentifyResponse(BaseModel):
+    """Result of re-identification process."""
+    reidentified_text: str = Field(..., description="Text with original PII values restored")
+    restored_entities: int = Field(0, description="Number of tokens/entities restored")
+    session_id: str = Field(..., description="Session ID used for vault lookup")
+    processing_time_ms: float = Field(0.0, description="Processing latency in milliseconds")
+
+
 class HealthResponse(BaseModel):
     """Health check operational status."""
     status: str = "healthy"

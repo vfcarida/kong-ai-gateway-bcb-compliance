@@ -17,6 +17,7 @@ This specification defines the HTTP REST interface exposed by the **PII Sanitize
 |---|---|---|:---:|
 | `GET` | `/health` | Container readiness and operational health probe. | Yes |
 | `POST` | `/sanitize` | Real-time Brazilian PII detection and redaction engine. | Yes |
+| `POST` | `/re-identify` | Restores original PII entities from replacement tokens via session vault. | Yes |
 | `GET` | `/` | Service metadata and version discovery. | Yes |
 | `POST` | `/mock-llm/v1/chat/completions` | OpenAI-compatible mock LLM chat completion endpoint. | Dev Only (`ENABLE_MOCK_LLM=true`) |
 | `GET` | `/mock-llm/last-request` | Memory inspection probe to verify upstream payload safety. | Dev Only (`ENABLE_MOCK_LLM=true`) |
@@ -109,7 +110,36 @@ Scans input text, detects Brazilian financial and personal PII data (CPF, CNPJ, 
 
 ---
 
-## 3. RFC 7807 Problem Details Error Responses
+## 3. `POST /re-identify`
+
+### Description
+Restores authentic sensitive PII entities from replacement placeholder tokens (e.g. `[REDACTED_CPF_1]`) or synthetic fake values using the session's tokenization vault. Enables authorized egress re-identification for internal banking workflows. Aliased to `POST /de-anonymize`.
+
+### Request Body (`ReidentifyRequest`)
+```json
+{
+  "text": "Atendimento concluído para o titular do CPF [REDACTED_CPF_1] referente a transação de [REDACTED_MONEY_1].",
+  "session_id": "session-financial-tx-9941"
+}
+```
+
+#### Fields:
+- `text` (*string, required*): The sanitized text containing tokens or synthetic values to restore. Cannot be empty or whitespace-only.
+- `session_id` (*string, required*): The session ID holding the token vault mappings established during a preceding `/sanitize` call.
+
+### Response (200 OK - `ReidentifyResponse`)
+```json
+{
+  "reidentified_text": "Atendimento concluído para o titular do CPF 123.456.789-09 referente a transação de R$ 2.500,00.",
+  "restored_entities": 2,
+  "session_id": "session-financial-tx-9941",
+  "processing_time_ms": 0.35
+}
+```
+
+---
+
+## 4. RFC 7807 Problem Details Error Responses
 
 When an error occurs, the API returns `application/problem+json`:
 

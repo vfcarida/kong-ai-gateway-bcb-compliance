@@ -1,0 +1,17 @@
+apiVersion: v2
+name: kong-ai-gateway-bcb-compliance
+description: Production-grade Helm chart for Kong AI Gateway Brazilian Central Bank (CMN 4.893/21 & BCB 85/21) Compliance Firewall.
+type: application
+version: 2.2.0
+appVersion: "2.2.0"
+keywords:
+  - kong
+  - ai-gateway
+  - bcb-compliance
+  - pii-sanitizer
+  - cmn-4893
+  - opentelemetry
+home: https://github.com/vfcarida/kong-ai-gateway-bcb-compliance
+maintainers:
+  - name: Vinicius Caridá
+    email: vfcarida@gmail.com

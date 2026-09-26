@@ -1,0 +1,77 @@
+# Default values for kong-ai-gateway-bcb-compliance Helm Chart.
+
+replicaCount: 2
+
+image:
+  repository: ghcr.io/vfcarida/kong-ai-gateway-bcb-compliance/pii-sanitizer
+  pullPolicy: IfNotPresent
+  tag: "2.2.0"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop:
+      - ALL
+
+service:
+  type: ClusterIP
+  port: 8443
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 512Mi
+  requests:
+    cpu: 250m
+    memory: 256Mi
+
+env:
+  enableMockLlm: false
+  port: 8443
+  sslKeyfile: /app/certs/dev-key.pem
+  sslCertfile: /app/certs/dev-cert.pem
+
+# Kong Ingress Controller CRD Configurations
+kongPlugins:
+  piiSanitizer:
+    enabled: true
+    sslVerify: true
+    timeoutMs: 1500
+    keepaliveTimeoutMs: 60000
+    keepalivePoolSize: 100
+    failOpen: false
+    redactType: "placeholder"
+  otelScrubber:
+    enabled: true
+    logRedactionMarker: "[REDACTED_BY_BCB_SCRUBBER]"
+    preserveFinopsMetrics: true
+
+ingress:
+  enabled: true
+  className: "kong"
+  annotations:
+    konghq.com/strip-path: "false"
+  path: /llm-proxy
+  pathType: Prefix
+
+otelCollector:
+  enabled: true
+  image: otel/opentelemetry-collector-contrib:latest
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi

@@ -156,7 +156,7 @@ PII_PATTERNS: List[Tuple[str, re.Pattern, int]] = [
 ]
 
 NAME_PATTERN = re.compile(
-    r"\b([A-ZÀ-Ú][a-zà-ú]{1,}(?:\s(?:da|de|do|dos|das|e)\s)?[A-ZÀ-Ú][a-zà-ú]{1,}(?:\s[A-ZÀ-Ú][a-zà-ú]{1,})*)\b"
+    r"\b([A-ZÀ-Ú][a-zà-ú]{1,}(?:\s(?:da|de|do|dos|das|e))?\s[A-ZÀ-Ú][a-zà-ú]{1,}(?:\s[A-ZÀ-Ú][a-zà-ú]{1,})*)\b"
 )
 
 NORMALIZED_STOPWORDS = {
@@ -165,6 +165,11 @@ NORMALIZED_STOPWORDS = {
     "esse", "essa", "esses", "essas", "qual", "quais", "como", "onde",
     "posso", "pode", "podemos", "para", "pela", "pelo", "banco central",
     "sistema financeiro", "amazon bedrock", "kong gateway", "resolucao cmn",
+    "transferencia", "transferência", "agencia", "agência", "ag", "conta",
+    "banco", "saldo", "extrato", "deposito", "depósito", "pagamento",
+    "pix", "ted", "doc", "comprovante", "pedido", "nota", "fatura",
+    "cliente", "usuario", "usuário", "solicitacao", "solicitação",
+    "confirmada", "confirmado",
 }
 
 
@@ -247,7 +252,11 @@ def detect_and_sanitize(
         name = match.group()
         name_lower = name.lower()
         words = name_lower.split()
-        is_stop = name_lower in NORMALIZED_STOPWORDS or any(w in NORMALIZED_STOPWORDS for w in words)
+        is_stop = (
+            name_lower in NORMALIZED_STOPWORDS
+            or any(w in NORMALIZED_STOPWORDS for w in words)
+            or any(sw in name_lower for sw in NORMALIZED_STOPWORDS if " " in sw)
+        )
         if not is_stop:
             raw_matches.append(("NAME", match.start(), match.end(), name, 10, None))
 

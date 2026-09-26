@@ -18,10 +18,13 @@ from fastapi.exceptions import RequestValidationError
 from app.schemas import (
     SanitizeRequest,
     SanitizeResponse,
+    ReidentifyRequest,
+    ReidentifyResponse,
     HealthResponse,
     ProblemDetails,
 )
-from app.pii_engine import detect_and_sanitize
+from app.pii_engine import detect_and_sanitize, normalize_entity_key
+from app.token_vault import GLOBAL_TOKEN_VAULT
 
 # ── Logging Setup ─────────────────────────────────────────────────────────────
 
@@ -121,16 +124,24 @@ async def sanitize_text(request_data: SanitizeRequest):
 
     session_map: Optional[Dict[str, str]] = None
     if request_data.session_id:
-        if len(SESSION_SYNTHETIC_CACHE) >= MAX_SESSION_CACHE_SIZE:
-            first_key = next(iter(SESSION_SYNTHETIC_CACHE))
-            del SESSION_SYNTHETIC_CACHE[first_key]
-        session_map = SESSION_SYNTHETIC_CACHE.setdefault(request_data.session_id, {})
+        session_vault = GLOBAL_TOKEN_VAULT.get_or_create_session(request_data.session_id)
+        session_map = session_vault.forward_map
 
     result = detect_and_sanitize(
         request_data.text,
         request_data.redact_type,
         entity_map=session_map,
     )
+
+    if request_data.session_id:
+        for entity in result.pii_detected:
+            canon_key = normalize_entity_key(entity.type, entity.original)
+            GLOBAL_TOKEN_VAULT.record_entity(
+                request_data.session_id,
+                canon_key,
+                entity.original,
+                entity.replacement,
+            )
 
     if result.total_entities > 0:
         logger.info(
@@ -141,6 +152,49 @@ async def sanitize_text(request_data: SanitizeRequest):
         )
 
     return result
+
+
+@app.post("/re-identify", response_model=ReidentifyResponse, tags=["Token Vault"])
+@app.post("/de-anonymize", response_model=ReidentifyResponse, tags=["Token Vault"])
+async def reidentify_text(request_data: ReidentifyRequest):
+    """
+    Restores original sensitive entities from replacement placeholders or synthetic values
+    using the session's tokenization vault. Enables authorized egress re-identification.
+    """
+    start_time = time.perf_counter()
+    if not request_data.text or not request_data.text.strip():
+        problem = ProblemDetails(
+            type="https://tools.ietf.org/html/rfc7807#section-3.1",
+            title="Bad Request",
+            status=status.HTTP_400_BAD_REQUEST,
+            detail="The input 'text' field cannot be empty.",
+            instance="/re-identify",
+        )
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content=problem.model_dump(exclude_none=True),
+            headers={"Content-Type": "application/problem+json"},
+        )
+
+    restored_text, count = GLOBAL_TOKEN_VAULT.reidentify(
+        request_data.session_id,
+        request_data.text,
+    )
+    elapsed_ms = (time.perf_counter() - start_time) * 1000
+
+    logger.info(
+        "Re-identification executed for session %s: restored %d entities | latency: %.2fms",
+        request_data.session_id,
+        count,
+        elapsed_ms,
+    )
+
+    return ReidentifyResponse(
+        reidentified_text=restored_text,
+        restored_entities=count,
+        session_id=request_data.session_id,
+        processing_time_ms=round(elapsed_ms, 2),
+    )
 
 
 # ── Mock LLM & Testing Endpoints ──────────────────────────────────────────────
@@ -231,8 +285,9 @@ async def reset_last_llm_request():
         return mock_disabled_response("/mock-llm/reset")
     last_llm_request["payload"] = None
     last_llm_request["timestamp"] = None
+    GLOBAL_TOKEN_VAULT.clear()
     SESSION_SYNTHETIC_CACHE.clear()
-    logger.info("Mock LLM state and session cache reset.")
+    logger.info("Mock LLM state, session cache, and token vault reset.")
     return {"status": "reset"}
 
 
@@ -241,6 +296,7 @@ async def root():
     """Root landing route."""
     endpoints = {
         "sanitize": "POST /sanitize",
+        "reidentify": "POST /re-identify",
         "health": "GET /health",
     }
     if is_mock_llm_enabled():

@@ -1,0 +1,113 @@
+{{- if .Values.otelCollector.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "kong-ai-compliance.fullname" . }}-otel-config
+  labels:
+    {{- include "kong-ai-compliance.labels" . | nindent 4 }}
+    app.kubernetes.io/component: otel-collector
+data:
+  otelcol-config.yml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+
+    processors:
+      memory_limiter:
+        check_interval: 1s
+        limit_percentage: 75
+        spike_limit_percentage: 15
+
+      batch:
+        send_batch_size: 100
+        timeout: 1s
+
+      attributes/redact_genai:
+        actions:
+          - key: gen_ai.prompt
+            value: "[REDACTED_BY_OTEL_PROCESSOR]"
+            action: update
+          - key: gen_ai.completion
+            value: "[REDACTED_BY_OTEL_PROCESSOR]"
+            action: update
+
+    exporters:
+      debug:
+        verbosity: normal
+
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, attributes/redact_genai, batch]
+          exporters: [debug]
+        metrics:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [debug]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kong-ai-compliance.fullname" . }}-otel
+  labels:
+    {{- include "kong-ai-compliance.labels" . | nindent 4 }}
+    app.kubernetes.io/component: otel-collector
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "kong-ai-compliance.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: otel-collector
+  template:
+    metadata:
+      labels:
+        {{- include "kong-ai-compliance.labels" . | nindent 8 }}
+        app.kubernetes.io/component: otel-collector
+    spec:
+      containers:
+        - name: otel-collector
+          image: "{{ .Values.otelCollector.image }}"
+          args: ["--config=/etc/otelcol-config.yml"]
+          volumeMounts:
+            - name: config-vol
+              mountPath: /etc/otelcol-config.yml
+              subPath: otelcol-config.yml
+          ports:
+            - containerPort: 4317
+              name: otlp-grpc
+            - containerPort: 4318
+              name: otlp-http
+          resources:
+            {{- toYaml .Values.otelCollector.resources | nindent 12 }}
+      volumes:
+        - name: config-vol
+          configMap:
+            name: {{ include "kong-ai-compliance.fullname" . }}-otel-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kong-ai-compliance.fullname" . }}-otel
+  labels:
+    {{- include "kong-ai-compliance.labels" . | nindent 4 }}
+    app.kubernetes.io/component: otel-collector
+spec:
+  type: ClusterIP
+  ports:
+    - port: 4317
+      targetPort: otlp-grpc
+      name: otlp-grpc
+    - port: 4318
+      targetPort: otlp-http
+      name: otlp-http
+  selector:
+    app.kubernetes.io/name: {{ include "kong-ai-compliance.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: otel-collector
+{{- end }}
