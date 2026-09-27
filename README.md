@@ -181,7 +181,10 @@ kong-ai-gateway-bcb-compliance/
 │   │   ├── 0001-bcb-compliance-architecture.md   # ADR: BCB CMN 4893/21 & BCB 85/21 Controls
 │   │   ├── 0002-otel-genai-privacy-scrubbing.md   # ADR: OTel GenAI telemetry scrubbing
 │   │   ├── 0003-session-consistent-synthetic-pseudonymization.md # ADR: Session Synthetic Consistency
-│   │   └── 0004-reversible-token-vault-re-identification.md      # ADR: Reversible Token Vault
+│   │   ├── 0004-reversible-token-vault-re-identification.md      # ADR: Reversible Token Vault
+│   │   ├── 0005-payment-card-luhn-pci-dss-detection.md           # ADR: Luhn Payment Card PAN & PCI-DSS
+│   │   ├── 0006-pix-key-evp-detection-bcb-res-1-2020.md          # ADR: BCB PIX Random Key (EVP) & RG
+│   │   └── 0007-ai-prompt-injection-guardrails-owasp-llm01.md    # ADR: OWASP LLM01 AI Prompt Guardrails
 │   ├── guides/
 │   │   ├── getting-started.md        # Local bootstrap & verification
 │   │   ├── production-hardening.md   # Enterprise security, mTLS & WORM logs
@@ -398,10 +401,10 @@ curl -i -X POST http://localhost:8000/llm-proxy \
 
 ## 🧪 Testing & Quality Assurance Suite
 
-The repository contains comprehensive test suites covering **160 automated tests** across Python and Lua:
+The repository contains comprehensive test suites covering **171 automated tests** across Python and Lua:
 
-### 1. Python Pytest Microservice Suite (160 tests)
-Covers PII detection, CPF/CNPJ Modulo-11, Payment Card ISO/IEC 7812 Luhn, and BCB PIX EVP/RG validation, batch RAG ingestion (`/sanitize-batch`), adversarial fuzzing (zero-width spaces, homoglyphs, repeated digits), reversible token vault de-anonymization, AI DLP quantitative precision/recall benchmark (zero-leakage verification), Prometheus `/metrics` operational contracts, Helm chart structure, K8s manifests, TLS hardening, and OTel redaction:
+### 1. Python Pytest Microservice Suite (171 tests across 10 test suites)
+Covers PII detection, CPF/CNPJ Modulo-11, Payment Card ISO/IEC 7812 Luhn, BCB PIX EVP/RG validation, AI Prompt Injection & Adversarial Jailbreak Guardrails (OWASP LLM01:2025), Granular Entity & Type Whitelisting, batch RAG ingestion (`/sanitize-batch`), adversarial fuzzing (zero-width spaces, homoglyphs, repeated digits), reversible token vault de-anonymization, AI DLP quantitative precision/recall benchmark (zero-leakage verification), Prometheus `/metrics` operational contracts, Helm chart structure, K8s manifests, TLS hardening, and OTel redaction:
 ```bash
 pip install -r pii-sanitizer/requirements.txt pytest httpx
 pytest pii-sanitizer/tests/ -v
@@ -501,6 +504,8 @@ Kong Gateway serializes structured audit records to `/tmp/audit-logs/kong-audit.
 - [ADR 0003: Session-Consistent Deterministic Synthetic Entity Pseudonymization](docs/adr/0003-session-consistent-synthetic-pseudonymization.md)
 - [ADR 0004: Reversible Tokenization Vault & Egress Re-Identification](docs/adr/0004-reversible-token-vault-re-identification.md)
 - [ADR 0005: Payment Card (PAN) Detection via ISO/IEC 7812 Luhn Algorithm & PCI-DSS Guardrails](docs/adr/0005-payment-card-luhn-pci-dss-detection.md)
+- [ADR 0006: BCB PIX Key (EVP Random Key) & RG Document Detection and Masking](docs/adr/0006-pix-key-evp-detection-bcb-res-1-2020.md)
+- [ADR 0007: AI Prompt Injection Guardrail Engine & Adversarial Input Defense (OWASP LLM01:2025)](docs/adr/0007-ai-prompt-injection-guardrails-owasp-llm01.md)
 
 ---
 

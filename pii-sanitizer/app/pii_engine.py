@@ -277,12 +277,22 @@ def detect_and_sanitize(
     text: str,
     redact_type: RedactType,
     entity_map: Optional[Dict[str, str]] = None,
+    ignored_entities: Optional[List[str]] = None,
+    ignored_types: Optional[List[str]] = None,
 ) -> SanitizeResponse:
     """Scans input text, detects Brazilian PII entities, and applies redactions."""
     start_time = time.perf_counter()
     entities: List[PIIEntity] = []
     counters: Dict[str, int] = {}
     raw_matches: List[Tuple[str, int, int, str, int, Optional[bool]]] = []
+
+    ignored_types_set = set(t.strip().upper() for t in ignored_types) if ignored_types else set()
+    ignored_entities_set = set(e.strip().lower() for e in ignored_entities) if ignored_entities else set()
+    ignored_digits_set = (
+        set(re.sub(r"\D", "", e) for e in ignored_entities if re.sub(r"\D", "", e))
+        if ignored_entities
+        else set()
+    )
 
     # Local synthetic map seeded by caller's entity_map if provided
     synthetic_map: Dict[str, str] = {}
@@ -291,6 +301,9 @@ def detect_and_sanitize(
 
     # 1. Regex scanning
     for pii_type, pattern, priority in PII_PATTERNS:
+        if pii_type in ignored_types_set:
+            continue
+
         for match in pattern.finditer(text):
             if match.lastindex and match.lastindex >= 1:
                 value = match.group(match.lastindex)
@@ -301,6 +314,19 @@ def detect_and_sanitize(
                 m_start = match.start()
                 m_end = match.end()
             checksum_valid: Optional[bool] = None
+
+            # Check if this specific entity is in ignored whitelist
+            if ignored_entities_set:
+                val_lower = value.strip().lower()
+                if val_lower in ignored_entities_set:
+                    continue
+                canon = normalize_entity_key(pii_type, value).lower()
+                if canon in ignored_entities_set:
+                    continue
+                if pii_type in ("CPF", "CNPJ", "CREDIT_CARD", "PHONE"):
+                    val_digits = re.sub(r"\D", "", value)
+                    if val_digits in ignored_digits_set:
+                        continue
 
             if pii_type == "CPF":
                 digits = re.sub(r"\D", "", value)
@@ -338,17 +364,21 @@ def detect_and_sanitize(
             raw_matches.append((pii_type, m_start, m_end, value, priority, checksum_valid))
 
     # 2. Name heuristic scanning
-    for match in NAME_PATTERN.finditer(text):
-        name = match.group()
-        name_lower = name.lower()
-        words = name_lower.split()
-        is_stop = (
-            name_lower in NORMALIZED_STOPWORDS
-            or any(w in NORMALIZED_STOPWORDS for w in words)
-            or any(sw in name_lower for sw in NORMALIZED_STOPWORDS if " " in sw)
-        )
-        if not is_stop:
-            raw_matches.append(("NAME", match.start(), match.end(), name, 10, None))
+    if "NAME" not in ignored_types_set:
+        for match in NAME_PATTERN.finditer(text):
+            name = match.group()
+            name_lower = name.lower()
+            if ignored_entities_set and (name_lower in ignored_entities_set or f"name:{name_lower}" in ignored_entities_set):
+                continue
+
+            words = name_lower.split()
+            is_stop = (
+                name_lower in NORMALIZED_STOPWORDS
+                or any(w in NORMALIZED_STOPWORDS for w in words)
+                or any(sw in name_lower for sw in NORMALIZED_STOPWORDS if " " in sw)
+            )
+            if not is_stop:
+                raw_matches.append(("NAME", match.start(), match.end(), name, 10, None))
 
     # 3. Conflict resolution
     raw_matches.sort(key=lambda m: (m[1], -m[4]))

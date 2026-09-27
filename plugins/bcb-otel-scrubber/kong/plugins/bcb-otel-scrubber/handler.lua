@@ -31,12 +31,16 @@ function BCBOTelScrubberHandler:log(config)
 
   if config.scrub_prompt then
     kong.log.set_serialize_value("gen_ai.prompt", replacement)
+    kong.log.set_serialize_value("gen_ai.content.prompt", replacement)
     kong.log.set_serialize_value("ai.prompt", replacement)
+    kong.log.set_serialize_value("llm.prompts", replacement)
   end
 
   if config.scrub_completion then
     kong.log.set_serialize_value("gen_ai.completion", replacement)
+    kong.log.set_serialize_value("gen_ai.content.completion", replacement)
     kong.log.set_serialize_value("ai.completion", replacement)
+    kong.log.set_serialize_value("llm.completions", replacement)
   end
 
   -- Explicitly ensure compliance flags are recorded

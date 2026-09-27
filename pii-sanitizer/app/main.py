@@ -21,6 +21,9 @@ from app.schemas import (
     SanitizeBatchRequest,
     SanitizeBatchResponse,
     SanitizeBatchItemResult,
+    PromptGuardRequest,
+    PromptGuardResponse,
+    PromptGuardResult,
     ReidentifyRequest,
     ReidentifyResponse,
     HealthResponse,
@@ -29,6 +32,7 @@ from app.schemas import (
 from app.pii_engine import detect_and_sanitize, normalize_entity_key
 from app.token_vault import GLOBAL_TOKEN_VAULT
 from app.metrics import GLOBAL_METRICS
+from app.prompt_guard import scan_prompt_injection
 
 # ── Logging Setup ─────────────────────────────────────────────────────────────
 
@@ -171,7 +175,15 @@ async def sanitize_text(request_data: SanitizeRequest):
         request_data.text,
         request_data.redact_type,
         entity_map=session_map,
+        ignored_entities=request_data.ignored_entities,
+        ignored_types=request_data.ignored_types,
     )
+
+    if request_data.check_prompt_injection:
+        guard_res = scan_prompt_injection(request_data.text)
+        result.prompt_guard = guard_res
+        if guard_res.flagged:
+            GLOBAL_METRICS.record_prompt_injection(guard_res.threat_categories)
 
     if request_data.session_id:
         for entity in result.pii_detected:
@@ -282,7 +294,15 @@ async def sanitize_batch(request_data: SanitizeBatchRequest):
             item.text,
             request_data.redact_type,
             entity_map=shared_map,
+            ignored_entities=request_data.ignored_entities,
+            ignored_types=request_data.ignored_types,
         )
+
+        item_guard: Optional[PromptGuardResult] = None
+        if request_data.check_prompt_injection:
+            item_guard = scan_prompt_injection(item.text)
+            if item_guard.flagged:
+                GLOBAL_METRICS.record_prompt_injection(item_guard.threat_categories)
 
         if request_data.session_id:
             for entity in res.pii_detected:
@@ -304,6 +324,7 @@ async def sanitize_batch(request_data: SanitizeBatchRequest):
                 sanitized_text=res.sanitized_text,
                 pii_detected=res.pii_detected,
                 total_entities=res.total_entities,
+                prompt_guard=item_guard,
             )
         )
 
@@ -318,6 +339,41 @@ async def sanitize_batch(request_data: SanitizeBatchRequest):
         total_entities=total_batch_entities,
         processing_time_ms=round(elapsed_ms, 2),
         redact_type=request_data.redact_type.value,
+    )
+
+
+@app.post("/guard/prompt-injection", response_model=PromptGuardResponse, tags=["AI Guardrails"])
+async def guard_prompt_injection(request_data: PromptGuardRequest):
+    """
+    Evaluates input prompt against OWASP Top 10 for LLMs (LLM01: Prompt Injection / Jailbreaks).
+    Detects direct instruction overrides, persona jailbreaks (DAN), delimiter spoofing, and system exfiltration.
+    """
+    start_time = time.perf_counter()
+    if not request_data.text or not request_data.text.strip():
+        GLOBAL_METRICS.record_request("/guard/prompt-injection", 400, 0.0)
+        problem = ProblemDetails(
+            type="https://tools.ietf.org/html/rfc7807#section-3.1",
+            title="Bad Request",
+            status=status.HTTP_400_BAD_REQUEST,
+            detail="The input 'text' field cannot be empty.",
+            instance="/guard/prompt-injection",
+        )
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content=problem.model_dump(exclude_none=True),
+            headers={"Content-Type": "application/problem+json"},
+        )
+
+    guard = scan_prompt_injection(request_data.text)
+    elapsed_ms = (time.perf_counter() - start_time) * 1000
+    GLOBAL_METRICS.record_request("/guard/prompt-injection", 200, elapsed_ms / 1000.0)
+    if guard.flagged:
+        GLOBAL_METRICS.record_prompt_injection(guard.threat_categories)
+
+    return PromptGuardResponse(
+        text=request_data.text,
+        guard=guard,
+        processing_time_ms=round(elapsed_ms, 2),
     )
 
 
