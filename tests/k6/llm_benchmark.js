@@ -31,7 +31,7 @@ export default function () {
       },
       {
         role: 'user',
-        content: 'Cliente João Silva (CPF 123.456.789-00) solicita saldo de R$ 50.000,00.',
+        content: 'Cliente João Silva (CPF 123.456.789-09) solicita saldo de R$ 50.000,00.',
       },
     ],
     model: 'mock-compliance-llm',

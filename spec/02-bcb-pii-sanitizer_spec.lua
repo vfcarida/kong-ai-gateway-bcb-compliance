@@ -94,6 +94,15 @@ describe("Plugin: bcb-pii-sanitizer", function()
       -- PIX Key
       assert.is_true(checksum.quick_pii_check("Chave PIX: a1b2c3d4-e5f6-4a5b-8c9d-0e1f2a3b4c5d"))
     end)
+
+    it("sanitizes echoed PII in memory for response completions (FEAT-03)", function()
+      local completion = '{"choices":[{"message":{"content":"O CPF do cliente é 123.456.789-09 e o cartão é 4532-0151-1283-0366."}}]}'
+      local sanitized = checksum.sanitize_text_in_memory(completion, "placeholder")
+      assert.is_nil(string.find(sanitized, "123.456.789-09", 1, true))
+      assert.is_nil(string.find(sanitized, "4532-0151-1283-0366", 1, true))
+      assert.is_not_nil(string.find(sanitized, "[REDACTED_CPF]", 1, true))
+      assert.is_not_nil(string.find(sanitized, "[REDACTED_CARD]", 1, true))
+    end)
   end)
 
   describe("Integration: Ingress PII Sanitization", function()

@@ -52,6 +52,13 @@ return {
               default = false,
             },
           },
+          {
+            scrub_response = {
+              type = "boolean",
+              required = true,
+              default = false,
+            },
+          },
         },
       },
     },

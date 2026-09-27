@@ -199,3 +199,41 @@ def test_clean_prompts_bypass_sidecar_in_lua_prescreen():
         assert "@" not in prompt
         assert "R$" not in prompt
         assert "agencia" not in prompt.lower() and "conta" not in prompt.lower()
+
+
+def test_checksum_lua_defines_sanitize_text_in_memory():
+    """Verify that checksum.lua exports in-memory response scrubbing function."""
+    content = CHECKSUM_LUA_PATH.read_text(encoding="utf-8")
+    assert "function _M.sanitize_text_in_memory(text, redact_type)" in content
+    assert "_M.validate_cpf" in content
+    assert "_M.validate_cnpj" in content
+    assert "_M.validate_luhn" in content
+    assert "[REDACTED_CPF]" in content
+    assert "[REDACTED_CNPJ]" in content
+    assert "[REDACTED_CARD]" in content
+
+
+def test_handler_lua_implements_response_filtering_phases():
+    """Verify that handler.lua implements header_filter and body_filter for response scrubbing."""
+    content = HANDLER_LUA_PATH.read_text(encoding="utf-8")
+    assert "function BCBPIISanitizerHandler:header_filter(config)" in content
+    assert "function BCBPIISanitizerHandler:body_filter(config)" in content
+    assert "config.scrub_response" in content
+    assert "checksum.sanitize_text_in_memory" in content
+
+
+def test_schema_lua_defines_scrub_response_field():
+    """Verify that schema.lua defines scrub_response boolean field."""
+    schema_path = (
+        REPO_ROOT
+        / "plugins"
+        / "bcb-pii-sanitizer"
+        / "kong"
+        / "plugins"
+        / "bcb-pii-sanitizer"
+        / "schema.lua"
+    )
+    assert schema_path.is_file()
+    content = schema_path.read_text(encoding="utf-8")
+    assert "scrub_response" in content
+    assert 'type = "boolean"' in content

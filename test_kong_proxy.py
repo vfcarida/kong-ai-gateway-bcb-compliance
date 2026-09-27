@@ -82,7 +82,7 @@ TEST_PROMPTS = [
     {
         "name": "Scenario 1: Financial request with formatted CPF and Bank Account",
         "prompt": (
-            "My name is João da Silva, my CPF is 123.456.789-00, "
+            "My name is João da Silva, my CPF is 123.456.789-09, "
             "Agência 1234 Conta 56789-0 and my balance is R$ 50.000. Can I transfer?"
         ),
         "expected_pii": ["NAME", "CPF", "MONEY", "BANK_ACCOUNT"],

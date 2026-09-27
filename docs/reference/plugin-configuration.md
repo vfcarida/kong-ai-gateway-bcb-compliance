@@ -25,6 +25,7 @@ This reference document describes the configuration schema, parameters, executio
 | `keepalive_pool_size` | `integer` | No | `100` | `1` – `10000` | Number of pooled cosocket connections maintained per Nginx worker. |
 | `fail_open` | `boolean` | No | `false` | `true`, `false` | **Confidentiality Gate**: If `false` (default), gateway returns RFC 7807 `502 Bad Gateway` upon sanitizer failure. If `true`, request proceeds unredacted with a warning header. |
 | `redact_type` | `string` | No | `"placeholder"` | `"placeholder"`, `"synthetic"` | Redaction strategy: `"placeholder"` replaces with `[REDACTED_CPF_1]`, `"synthetic"` replaces with deterministic fake entities. |
+| `scrub_response` | `boolean` | No | `false` | `true`, `false` | **Egress Protection (FEAT-03)**: When `true`, enables in-memory `body_filter` response completion inspection, redacting model-echoed PII in SSE streams and JSON bodies. |
 
 ### In-Gateway Pure Lua Checksum Engine & Fast-Path Optimization (`checksum.lua`)
 To eliminate unnecessary sidecar HTTP round-trips for non-sensitive prompts (e.g., general inquiries, code generation, mathematical formulas, and order numbers that fail check-digit algorithms), `handler.lua` integrates an in-process pure Lua validation engine (`kong.plugins.bcb-pii-sanitizer.checksum`):
@@ -36,6 +37,11 @@ To eliminate unnecessary sidecar HTTP round-trips for non-sensitive prompts (e.g
   - Automatically identifies whether any substring in the prompt matches an email (`@`), currency indicator (`R$`, `BRL`, `US$`), bank account trigger (`agência`, `conta`, `c/c`), PIX EVP/UUID pattern, formatted RG (`XX.XXX.XXX-X`), or formatted Brazilian phone number.
   - For contiguous digit sequences of length 11, 14, or 15–16, runs in-memory Modulo-11 or Luhn validation.
   - If a prompt contains digits but none of the sequences pass mathematical validation and no other PII indicators exist (e.g. `"Explain Newton's 2nd law of motion"`, `"Top 3 best practices for 2026"`, `"Order 12345678900 pending"`), the prompt is certified clean directly in worker memory, bypassing the sidecar network hop entirely and reducing latency to `<0.1ms`.
+
+### Egress Completion Scrubbing (`body_filter` & `header_filter`)
+When `scrub_response: true` is configured on a route:
+- In `header_filter`, `Content-Length` is removed to allow streaming chunk mutation without HTTP body truncation.
+- In `body_filter`, pure Lua `checksum.sanitize_text_in_memory` inspects outgoing chunks and redacts echoed CPFs, CNPJs, card numbers, emails, phones, and PIX keys without cosockets. Documented in [ADR 0008](../adr/0008-in-memory-response-completion-pii-scrubbing.md).
 
 ### Error Responses & RFC 7807 Format
 When a request fails validation or the sanitizer service degrades, the plugin returns standard `application/problem+json`:

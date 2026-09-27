@@ -303,12 +303,36 @@ function BCBPIISanitizerHandler:access(config)
 end
 
 --- Injects audit and compliance verification headers into downstream response
+-- and prepares response body filtering when scrub_response is enabled.
 -- @param config Plugin configuration record
 function BCBPIISanitizerHandler:header_filter(config)
   if kong.ctx.shared.pii_sanitizer then
     kong.response.set_header("X-BCB-Compliance-Verified", "true")
     local count = kong.ctx.shared.pii_sanitizer.pii_identified or 0
     kong.response.set_header("X-BCB-PII-Entities-Redacted", tostring(count))
+  end
+
+  if config.scrub_response then
+    local content_type = ngx.header["Content-Type"] or ""
+    if string.find(content_type, "json", 1, true) or string.find(content_type, "event-stream", 1, true) or string.find(content_type, "plain", 1, true) then
+      ngx.ctx.bcb_scrub_response = true
+      ngx.header["Content-Length"] = nil
+    end
+  end
+end
+
+--- Pure in-memory streaming and non-streaming response body filter (FEAT-03)
+-- Sanitizes echoed PII in LLM completions with zero cosockets.
+-- @param config Plugin configuration record
+function BCBPIISanitizerHandler:body_filter(config)
+  if not ngx.ctx.bcb_scrub_response then
+    return
+  end
+
+  local chunk = ngx.arg[1]
+  if chunk and #chunk > 0 and ok_chk and checksum and checksum.sanitize_text_in_memory then
+    local sanitized_chunk = checksum.sanitize_text_in_memory(chunk, config.redact_type or "placeholder")
+    ngx.arg[1] = sanitized_chunk
   end
 end
 

@@ -231,4 +231,80 @@ function _M.quick_pii_check(text)
   return false
 end
 
+--- Pure in-memory PII redactor for egress LLM completions (body_filter).
+-- Executes with zero cosockets, zero external network calls, and sub-millisecond latency.
+-- @param text String content from upstream completion
+-- @param redact_type Redaction marker mode ("placeholder" or "synthetic")
+-- @return string Sanitized text
+function _M.sanitize_text_in_memory(text, redact_type)
+  if not text or type(text) ~= "string" or #text == 0 then
+    return text
+  end
+
+  local result = text
+
+  -- 1. Redact Formatted CPF: XXX.XXX.XXX-XX
+  result = string.gsub(result, "(%d%d%d)%.(%d%d%d)%.(%d%d%d)%-(%d%d)", function(d1, d2, d3, d4)
+    local raw = d1 .. d2 .. d3 .. d4
+    if _M.validate_cpf(raw) then
+      return "[REDACTED_CPF]"
+    end
+    return nil
+  end)
+
+  -- 2. Redact Formatted CNPJ: XX.XXX.XXX/XXXX-XX
+  result = string.gsub(result, "(%d%d)%.(%d%d%d)%.(%d%d%d)/(%d%d%d%d)%-(%d%d)", function(d1, d2, d3, d4, d5)
+    local raw = d1 .. d2 .. d3 .. d4 .. d5
+    if _M.validate_cnpj(raw) then
+      return "[REDACTED_CNPJ]"
+    end
+    return nil
+  end)
+
+  -- 3. Redact Formatted Payment Cards: XXXX-XXXX-XXXX-XXXX or XXXX XXXX XXXX XXXX
+  result = string.gsub(result, "(%d%d%d%d)[%s%-](%d%d%d%d)[%s%-](%d%d%d%d)[%s%-](%d%d%d%d)", function(p1, p2, p3, p4)
+    local raw = p1 .. p2 .. p3 .. p4
+    if _M.validate_luhn(raw) then
+      return "[REDACTED_CARD]"
+    end
+    return nil
+  end)
+
+  -- 4. Redact Formatted Brazilian RG: XX.XXX.XXX-X or X.XXX.XXX-X
+  result = string.gsub(result, "(%d+%.%d%d%d%.%d%d%d%-[%dxX])", "[REDACTED_RG]")
+
+  -- 5. Redact Formatted Phones: (XX) XXXXX-XXXX or (XX) XXXX-XXXX
+  result = string.gsub(result, "(%(%d%d%)%s?%d%d%d%d+%-?%d%d%d%d)", "[REDACTED_PHONE]")
+
+  -- 6. Redact Emails
+  result = string.gsub(result, "([%w%.%_%+-]+@[%w%.%_%+-]+%.%a+)", "[REDACTED_EMAIL]")
+
+  -- 7. Redact PIX Key EVPs: UUID v4 with context
+  result = string.gsub(result, "([%a%s:]+)([0-9a-fA-F]{8}%-[0-9a-fA-F]{4}%-[0-9a-fA-F]{4}%-[0-9a-fA-F]{4}%-[0-9a-fA-F]{12})", function(prefix, uuid)
+    local lower_p = string.lower(prefix)
+    if string.find(lower_p, "pix") or string.find(lower_p, "evp") or string.find(lower_p, "chave") then
+      return prefix .. "[REDACTED_PIX_KEY]"
+    end
+    return nil
+  end)
+
+  -- 8. Redact Raw 11-digit CPFs (frontier pattern %f[%d]...%f[%D])
+  result = string.gsub(result, "(%f[%d]%d%d%d%d%d%d%d%d%d%d%d%f[%D])", function(digits)
+    if _M.validate_cpf(digits) then
+      return "[REDACTED_CPF]"
+    end
+    return nil
+  end)
+
+  -- 9. Redact Raw 14-digit CNPJs
+  result = string.gsub(result, "(%f[%d]%d%d%d%d%d%d%d%d%d%d%d%d%d%d%f[%D])", function(digits)
+    if _M.validate_cnpj(digits) then
+      return "[REDACTED_CNPJ]"
+    end
+    return nil
+  end)
+
+  return result
+end
+
 return _M
