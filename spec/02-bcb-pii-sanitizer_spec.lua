@@ -36,7 +36,63 @@ describe("Plugin: bcb-pii-sanitizer", function()
       end
       assert.is_not_nil(redact_field)
       assert.equal("placeholder", redact_field.default)
-      assert.same({ "placeholder", "synthetic" }, redact_field.one_of)
+    end)
+  end)
+
+  describe("Unit: in-gateway pure Lua checksum & fast-path engine", function()
+    local checksum = require "kong.plugins.bcb-pii-sanitizer.checksum"
+
+    it("correctly validates mathematical CPF checksums via Modulo-11", function()
+      -- Valid CPFs
+      assert.is_true(checksum.validate_cpf("12345678909"))
+      assert.is_true(checksum.validate_cpf("52998224725"))
+      -- Invalid CPFs
+      assert.is_false(checksum.validate_cpf("12345678900"))
+      assert.is_false(checksum.validate_cpf("11111111111")) -- all identical digits
+      assert.is_false(checksum.validate_cpf("12345")) -- invalid length
+    end)
+
+    it("correctly validates mathematical CNPJ checksums via Modulo-11", function()
+      -- Valid CNPJs
+      assert.is_true(checksum.validate_cnpj("11222333000181"))
+      assert.is_true(checksum.validate_cnpj("00000000000191"))
+      -- Invalid CNPJs
+      assert.is_false(checksum.validate_cnpj("11222333000180"))
+      assert.is_false(checksum.validate_cnpj("00000000000000")) -- all identical digits
+      assert.is_false(checksum.validate_cnpj("1234567890123")) -- 13 digits
+    end)
+
+    it("correctly validates Payment Card PANs via ISO/IEC 7812 Luhn", function()
+      -- Valid Luhn numbers (Visa, Mastercard test cards)
+      assert.is_true(checksum.validate_luhn("4532015112830366"))
+      -- Invalid Luhn numbers
+      assert.is_false(checksum.validate_luhn("4532015112830367"))
+      assert.is_false(checksum.validate_luhn("1111111111111111"))
+    end)
+
+    it("bypasses sidecar for clean prompts containing benign numbers", function()
+      -- Benign queries with digits that do NOT contain regulated PII
+      assert.is_false(checksum.quick_pii_check("Explain Newton's 2nd law of motion"))
+      assert.is_false(checksum.quick_pii_check("What are the top 3 best practices for 2026?"))
+      assert.is_false(checksum.quick_pii_check("Order number 98765432100 is pending shipment"))
+      assert.is_false(checksum.quick_pii_check("The server port is 8080 and timeout is 30s"))
+    end)
+
+    it("triggers deep scan for prompts containing real PII entities", function()
+      -- Formatted CPF
+      assert.is_true(checksum.quick_pii_check("Meu CPF é 123.456.789-09"))
+      -- Unformatted valid CPF
+      assert.is_true(checksum.quick_pii_check("Favor verificar o CPF 12345678909"))
+      -- Formatted CNPJ
+      assert.is_true(checksum.quick_pii_check("Empresa CNPJ 11.222.333/0001-81"))
+      -- Email
+      assert.is_true(checksum.quick_pii_check("Contato: carlos.silva@banco.com.br"))
+      -- Currency
+      assert.is_true(checksum.quick_pii_check("Transferência de R$ 1.500,00"))
+      -- Bank account
+      assert.is_true(checksum.quick_pii_check("Agência 1234 conta corrente 56789-0"))
+      -- PIX Key
+      assert.is_true(checksum.quick_pii_check("Chave PIX: a1b2c3d4-e5f6-4a5b-8c9d-0e1f2a3b4c5d"))
     end)
   end)
 

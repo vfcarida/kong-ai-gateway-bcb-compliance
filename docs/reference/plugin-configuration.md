@@ -26,11 +26,16 @@ This reference document describes the configuration schema, parameters, executio
 | `fail_open` | `boolean` | No | `false` | `true`, `false` | **Confidentiality Gate**: If `false` (default), gateway returns RFC 7807 `502 Bad Gateway` upon sanitizer failure. If `true`, request proceeds unredacted with a warning header. |
 | `redact_type` | `string` | No | `"placeholder"` | `"placeholder"`, `"synthetic"` | Redaction strategy: `"placeholder"` replaces with `[REDACTED_CPF_1]`, `"synthetic"` replaces with deterministic fake entities. |
 
-### In-Gateway Fast-Path Optimization (`quick_pii_check`)
-To prevent unnecessary sidecar HTTP round-trips for non-sensitive prompts (e.g., standard code generation, translation queries), `handler.lua` executes an in-process pre-filter before invoking the external microservice:
-- **Rule 1**: If the request body contains no ASCII digits (`0-9`), mathematical CPF, CNPJ, phone, money, and bank account detection is bypassed.
-- **Rule 2**: If no digits and no uppercase Latin characters are present, name detection is bypassed.
-- **Rule 3**: If neither condition is met, the prompt is deemed clean and forwarded directly upstream, reducing latency overhead to `<1ms`.
+### In-Gateway Pure Lua Checksum Engine & Fast-Path Optimization (`checksum.lua`)
+To eliminate unnecessary sidecar HTTP round-trips for non-sensitive prompts (e.g., general inquiries, code generation, mathematical formulas, and order numbers that fail check-digit algorithms), `handler.lua` integrates an in-process pure Lua validation engine (`kong.plugins.bcb-pii-sanitizer.checksum`):
+- **Pure-Lua Checksums**:
+  - `validate_cpf(digits_str)`: Computes Modulo-11 dual check-digits with identical digit sequence rejection (`00000000000` through `99999999999`).
+  - `validate_cnpj(digits_str)`: Computes Modulo-11 dual check-digits using standard Brazilian banking weights with identical sequence rejection.
+  - `validate_luhn(digits_str)`: Evaluates ISO/IEC 7812 Mod-10 Luhn checksums on 13-19 digit payment card candidates.
+- **Candidate Pre-Screening (`quick_pii_check`)**:
+  - Automatically identifies whether any substring in the prompt matches an email (`@`), currency indicator (`R$`, `BRL`, `US$`), bank account trigger (`agência`, `conta`, `c/c`), PIX EVP/UUID pattern, formatted RG (`XX.XXX.XXX-X`), or formatted Brazilian phone number.
+  - For contiguous digit sequences of length 11, 14, or 15–16, runs in-memory Modulo-11 or Luhn validation.
+  - If a prompt contains digits but none of the sequences pass mathematical validation and no other PII indicators exist (e.g. `"Explain Newton's 2nd law of motion"`, `"Top 3 best practices for 2026"`, `"Order 12345678900 pending"`), the prompt is certified clean directly in worker memory, bypassing the sidecar network hop entirely and reducing latency to `<0.1ms`.
 
 ### Error Responses & RFC 7807 Format
 When a request fails validation or the sanitizer service degrades, the plugin returns standard `application/problem+json`:

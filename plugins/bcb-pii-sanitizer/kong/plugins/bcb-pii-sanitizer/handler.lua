@@ -29,32 +29,35 @@
 local cjson = require "cjson.safe"
 local http = require "resty.http"
 
+local ok_chk, checksum = pcall(require, "kong.plugins.bcb-pii-sanitizer.checksum")
+if not ok_chk then
+  ok_chk, checksum = pcall(require, "checksum")
+end
+
 local BCBPIISanitizerHandler = {
   PRIORITY = 1010, -- Execute before ai-proxy (1000)
-  VERSION = "2.1.0",
+  VERSION = "2.2.0",
 }
 
 --- Fast in-memory pre-screening to bypass external sidecar when no PII markers exist
 -- @param text String to inspect
 -- @return boolean true if text requires deep scanning, false if provably devoid of PII
 local function quick_pii_check(text)
+  if ok_chk and checksum and checksum.quick_pii_check then
+    return checksum.quick_pii_check(text)
+  end
   if not text or #text == 0 then
     return false
   end
-  -- 1. Digits are mandatory for CPF, CNPJ, Phone, Bank Account, and Monetary amounts
-  if string.find(text, "%d") then
-    return true
-  end
-  -- 2. At-sign is mandatory for Email addresses
-  if string.find(text, "@", 1, true) then
-    return true
-  end
-  -- 3. Capitalized word sequences may represent personal Names
-  if string.find(text, "%u%l+%s+%u%l+") then
+  -- Defensive fallback if checksum module is unavailable
+  if string.find(text, "%d") or string.find(text, "@", 1, true) or string.find(text, "%u%l+%s+%u%l+") then
     return true
   end
   return false
 end
+
+BCBPIISanitizerHandler.quick_pii_check = quick_pii_check
+BCBPIISanitizerHandler.checksum = ok_chk and checksum or nil
 
 --- Sanitizes a single text string via LRU cache or microservice call
 -- @param text String content to scan and redact
